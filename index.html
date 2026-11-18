@@ -98,16 +98,16 @@
 
     <nav class="modes" id="modes" aria-label="チェックの種類">
       <button type="button" class="mode is-active" data-tab="all">
-        <span class="mode-no">00</span><span class="mode-lbl">まるごと</span>
+        <span class="mode-no">00</span><span class="mode-lbl">一括</span>
       </button>
       <button type="button" class="mode" data-tab="survey">
         <span class="mode-no">01</span><span class="mode-lbl">アンケート</span>
       </button>
       <button type="button" class="mode" data-tab="text">
-        <span class="mode-no">02</span><span class="mode-lbl">本文校正</span>
+        <span class="mode-no">02</span><span class="mode-lbl">本文</span>
       </button>
       <button type="button" class="mode" data-tab="title">
-        <span class="mode-no">03</span><span class="mode-lbl">タイトル案</span>
+        <span class="mode-no">03</span><span class="mode-lbl">タイトル</span>
       </button>
     </nav>
 
@@ -139,7 +139,7 @@
           <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite（高速・大量処理向け）</option>
           <option value="gemini-3.1-pro">gemini-3.1-pro（高精度・長文脈・低レート）</option>
         </select>
-        <p class="hint">404エラーが出たら、エラー本文の推奨モデル名にvalue値を書き換えてください。</p>
+        <p class="hint">AIが動かない（404）ときは、体験記リーダーに連絡してください。</p>
       </div>
     </div>
 
@@ -169,11 +169,11 @@
   <!-- ================= ステージ ================= -->
   <main class="stage">
 
-    <!-- ---------- まるごと ---------- -->
+    <!-- ---------- 一括 ---------- -->
     <section class="view is-active" id="view-all" aria-labelledby="h-all">
       <header class="view-head">
         <div class="eyebrow">00 &nbsp;/</div>
-        <h2 class="view-title" id="h-all">まるごと貼り付けてチェック</h2>
+        <h2 class="view-title" id="h-all">一括して貼り付けてチェック</h2>
         <p class="lead">管理画面の表示をそのままコピーして貼り付けます。「アンケート結果」「本文」「タイトル案」の見出しを目印に、自動で3つに分けます。</p>
       </header>
 
