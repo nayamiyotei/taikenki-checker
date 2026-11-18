@@ -14,7 +14,7 @@ const CONFIG = {
   REQUIRE_MASK_CONFIRM: true,
   // タイトルの文字数目安（rules.js の titleRules.format と合わせる）
   TITLE_IDEAL: 20,
-  TITLE_MAX: 40
+  TITLE_MAX: 30
 };
 
 (() => {
@@ -105,8 +105,11 @@ const CONFIG = {
 ・actionOnPublish は、掲載前に「削除」が必要なものだけ true
 ・迷う場合は、削除対象として指摘し、reason に迷った点を書く
 ・指摘がなければ issues は空配列
+・text は、タイトル案そのもの。必ず20字以内にする（最大でも25字）。出力する前に、自分で文字数を数えて確認すること
+・20字以内の案を、5案のうち4案以上にする。25字を超える案は、1つも出力しない
 ・創作や、元の文章にない内容の追加はしない`;
 
+  
   function buildSurveyPrompt(items) {
     const list = items
       .map((it) => `[${it.index}] 質問：${it.question}\n回答：${it.answer || "（空欄）"}`)
@@ -637,8 +640,24 @@ ${text}`;
     setStatus(status, "AIが読んでいます", true);
     renderLoading(out);
     try {
-      const raw = await GeminiClient.call(getApiKey(), getModel(), buildTitlePrompt(text), "titles");
-      const titles = Array.isArray(raw && raw.titles) ? raw.titles.filter((t) => t && t.text) : [];
+      const pick = (raw) => Array.isArray(raw && raw.titles) ? raw.titles.filter((t) => t && t.text) : [];
+      const len = (t) => Array.from(RuleEngine.enforceOnText(t.text || "")).length;
+      
+      let titles = pick(await GeminiClient.call(getApiKey(), getModel(), buildTitlePrompt(text), "titles"));
+      let ok = titles.filter((t) => len(t) <= CONFIG.TITLE_MAX);
+      
+      // 20字以内の案が3つ未満、または25字を超える案が混ざっていたら、1回だけやり直す
+      if (ok.length < titles.length || titles.filter((t) => len(t) <= CONFIG.TITLE_IDEAL).length < 3) {
+        const retryPrompt = buildTitlePrompt(text) +
+          `\n\n【やり直し】前回の案は長すぎました。次の案は使わず、すべて20字以内（最大でも25字）で作り直してください。\n` +
+          titles.map((t) => `・${t.text}（${len(t)}字）`).join("\n");
+        const retry = pick(await GeminiClient.call(getApiKey(), getModel(), retryPrompt, "titles"));
+        if (retry.length) titles = retry;
+      }
+      // 最終的に、25字を超える案は表示しない
+      titles = titles.filter((t) => len(t) <= CONFIG.TITLE_MAX);
+      // 20字以内の案を上に並べる
+      titles.sort((a, b) => len(a) - len(b));
       renderTitles(titles);
       setStatus(status, "完了しました");
       track("タイトル案");
