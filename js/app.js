@@ -365,7 +365,7 @@ ${text}`;
   function updateSurveyButtons() {
     const has = surveyItems.length > 0;
     $("#surveyRuleBtn").disabled = !has;
-    $("#surveyRunBtn").disabled = !has || (CONFIG.REQUIRE_MASK_CONFIRM && !$("#maskSurvey").checked);
+    $("#surveyRunBtn").disabled = !has;
   }
 
   $("#parseBtn").addEventListener("click", () => {
@@ -374,7 +374,7 @@ ${text}`;
     updateSurveyButtons();
     setStatus($("#surveyStatus"), surveyItems.length ? "" : "項目が見つかりませんでした。貼り付け内容を確認してください。");
   });
-  $("#maskSurvey").addEventListener("change", updateSurveyButtons);
+  
   $("#surveyInput").addEventListener("input", () => { surveyItems = []; renderParsePreview(); updateSurveyButtons(); });
 
   function renderSurveyResults(ruleByIndex, aiByIndex, usedAi) {
@@ -550,9 +550,9 @@ ${text}`;
   });
 
   function updateTextButtons() {
-    $("#runBtn").disabled = CONFIG.REQUIRE_MASK_CONFIRM && !$("#maskText").checked;
+    $("#runBtn").disabled = false;
   }
-  $("#maskText").addEventListener("change", updateTextButtons);
+  
 
   async function runProofAI() {
     const text = inputText.value;
@@ -587,9 +587,8 @@ ${text}`;
     $("#titleCount").textContent = titleInput.value.length.toLocaleString("ja-JP") + "文字";
   });
   function updateTitleButtons() {
-    $("#titleRunBtn").disabled = CONFIG.REQUIRE_MASK_CONFIRM && !$("#maskTitle").checked;
+    $("#titleRunBtn").disabled = !has;
   }
-  $("#maskTitle").addEventListener("change", updateTitleButtons);
 
   function renderTitles(titles) {
     const out = $("#titleResults");
@@ -725,11 +724,10 @@ ${text}`;
   function updateAllButtons() {
     const has = !!(allParts.survey || allParts.text);
     $("#allRuleBtn").disabled = !has;
-    $("#allRunBtn").disabled = !has || (CONFIG.REQUIRE_MASK_CONFIRM && !$("#maskAll").checked);
+    $("#allRunBtn").disabled = !has;
   }
   $("#allInput").addEventListener("input", applyAllParts);
-  $("#maskAll").addEventListener("change", updateAllButtons);
-
+  
   const countIssues = (sel) => $$(".issue", $(sel)).length;
 
   function renderAllSummary(usedAi) {
