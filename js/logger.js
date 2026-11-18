@@ -6,7 +6,7 @@
  * LOG_URL が空のままなら、何も送信しません（記録機能はオフ）。
  */
 const LOGGER_CONFIG = {
-  LOG_URL: "",                        // 例："https://script.google.com/macros/s/xxxxxxxx/exec"
+  LOG_URL: "https://script.google.com/macros/s/AKfycbxlbBJk3BalM-GqUUNg4Qj9eebqXsCQv4QtlubAajg3p7ncnIX_KUwEH7KB_5SEfE7KpA/exec",                        // 例："https://script.google.com/macros/s/xxxxxxxx/exec"
   TOOL_NAME: "一次チェックツール",
   NAME_KEY: "checker-user-name"
 };
