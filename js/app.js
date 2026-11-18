@@ -452,6 +452,7 @@ ${text}`;
     } catch (e) {
       renderError(out, e);
       setStatus(status, "エラーが発生しました");
+      trackError("アンケート", e);   // 本文校正／タイトル案では、それぞれの名前に
       return false;
     } finally {
       updateSurveyButtons();
@@ -460,6 +461,13 @@ ${text}`;
   }
   $("#surveyRunBtn").addEventListener("click", runSurveyAI);
 
+  async function trackError(action, e) {
+  const msg = String((e && e.message) || e).replace(/\s+/g, " ").slice(0, 150);
+  await UsageLogger.log("エラー：" + action, 1, msg);
+  }
+
+
+  
   /* ============================================================
      ② 本文校正
      ============================================================ */
@@ -571,6 +579,7 @@ ${text}`;
     } catch (e) {
       renderError(out, e);
       setStatus(status, "エラーが発生しました");
+      trackError("アンケート", e);   // 本文校正／タイトル案では、それぞれの名前に
       return false;
     } finally {
       updateTextButtons();
@@ -636,6 +645,7 @@ ${text}`;
     } catch (e) {
       renderError(out, e);
       setStatus(status, "エラーが発生しました");
+      trackError("アンケート", e);   // 本文校正／タイトル案では、それぞれの名前に
       return false;
     } finally {
       updateTitleButtons();
