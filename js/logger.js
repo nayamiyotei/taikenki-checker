@@ -16,13 +16,14 @@ const UsageLogger = (() => {
   const setName = (v) => { try { localStorage.setItem(LOGGER_CONFIG.NAME_KEY, v); } catch (_) {} };
 
   /** @returns {Promise<boolean>} 送信したら true */
-  async function log(action, count) {
+  async function log(action, count, detail) {
     if (!LOGGER_CONFIG.LOG_URL) return false;
     const payload = {
       name: getName().trim() || "（未入力）",
       tool: LOGGER_CONFIG.TOOL_NAME,
       action: action,
       count: count,
+      detail: detail || "",
       ts: new Date().toISOString()
     };
     try {
