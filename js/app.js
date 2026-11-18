@@ -76,6 +76,7 @@ const CONFIG = {
   function showTab(name) {
     $$(".mode").forEach((b) => b.classList.toggle("is-active", b.dataset.tab === name));
     $$(".view").forEach((v) => v.classList.toggle("is-active", v.id === "view-" + name));
+    if (name === "all" && typeof renderCopyPanel === "function") renderCopyPanel();
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
   $$(".mode").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -204,6 +205,17 @@ ${text}`;
     "ai":          { cls: "ai",     label: "AI判断" }
   };
 
+  /** 判断（採用／不採用／要相談／未判断）を設定して、集計と「修正後の本文」を更新する */
+  function setJudge(el, j) {
+    $$(".judge button", el).forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.j === j)));
+    el.classList.remove("is-adopt", "is-reject", "is-ask");
+    el.dataset.judge = j || "";
+    if (j) el.classList.add("is-" + j);
+    const c = el.closest(".results");
+    updateTally(c);
+    if (c) c.dispatchEvent(new CustomEvent("judgechange"));
+  }
+
   function makeIssueCard(issue) {
     const src = SRC[issue.source] || SRC.ai;
     const hasFix = typeof issue.suggested === "string" && issue.suggested.trim() !== "";
@@ -228,20 +240,13 @@ ${text}`;
          <button type="button" data-j="adopt"  aria-pressed="false">採用</button>
          <button type="button" data-j="reject" aria-pressed="false">不採用</button>
          <button type="button" data-j="ask"    aria-pressed="false">要相談</button>
+         <span class="applied">✔ 修正後の本文に反映しました</span>
        </div>`;
 
     $$(".judge button", el).forEach((btn) => {
       btn.addEventListener("click", () => {
         const already = btn.getAttribute("aria-pressed") === "true";
-        $$(".judge button", el).forEach((b) => b.setAttribute("aria-pressed", "false"));
-        el.classList.remove("is-adopt", "is-reject", "is-ask");
-        el.dataset.judge = "";
-        if (!already) {
-          btn.setAttribute("aria-pressed", "true");
-          el.classList.add("is-" + btn.dataset.j);
-          el.dataset.judge = btn.dataset.j;
-        }
-        updateTally(el.closest(".results"));
+        setJudge(el, already ? "" : btn.dataset.j);
       });
     });
     return el;
@@ -273,10 +278,21 @@ ${text}`;
     const bar = document.createElement("div");
     bar.className = "copybar";
     bar.innerHTML =
-      `<button type="button" class="ghost" data-copy="adopt">採用した修正をコピー</button>
+      `<button type="button" class="ghost accent" data-bulk="adoptAll">すべて採用</button>
+       <button type="button" class="ghost" data-bulk="rejectRest">未判断を不採用に</button>
+       <button type="button" class="ghost" data-bulk="undo">元に戻す</button>
+       <button type="button" class="ghost" data-copy="adopt">採用した修正をコピー</button>
        <button type="button" class="ghost" data-copy="all">すべての指摘をコピー</button>`;
     container.appendChild(bar);
-    $$("button", bar).forEach((b) => b.addEventListener("click", () => {
+    $$("button[data-bulk]", bar).forEach((b) => b.addEventListener("click", () => {
+      $$(".issue", container).forEach((c) => {
+        const j = c.dataset.judge || "";
+        if (b.dataset.bulk === "adoptAll") setJudge(c, "adopt");
+        else if (b.dataset.bulk === "rejectRest") { if (!j) setJudge(c, "reject"); }
+        else setJudge(c, "");
+      });
+    }));
+    $$("button[data-copy]", bar).forEach((b) => b.addEventListener("click", () => {
       const cards = $$(".issue", container).filter((c) =>
         b.dataset.copy === "all" ? true : c.dataset.judge === "adopt");
       const text = cards.map((c) =>
@@ -414,9 +430,10 @@ ${text}`;
   $("#surveyRuleBtn").addEventListener("click", () => {
     renderSurveyResults(surveyRuleChecks(), {}, false);
     setStatus($("#surveyStatus"), "ルールのみでチェックしました（送信なし）");
+    track("アンケート（ルールのみ）");
   });
 
-  $("#surveyRunBtn").addEventListener("click", async () => {
+  async function runSurveyAI() {
     const btn = $("#surveyRunBtn"), status = $("#surveyStatus"), out = $("#surveyResults");
     btn.disabled = true;
     setStatus(status, "AIが読んでいます", true);
@@ -431,23 +448,41 @@ ${text}`;
       });
       renderSurveyResults(surveyRuleChecks(), aiByIndex, true);
       setStatus(status, "完了しました");
+      track("アンケート");
     } catch (e) {
       renderError(out, e);
       setStatus(status, "エラーが発生しました");
+      return false;
     } finally {
       updateSurveyButtons();
     }
-  });
+    return true;
+  }
+  $("#surveyRunBtn").addEventListener("click", runSurveyAI);
 
   /* ============================================================
      ② 本文校正
      ============================================================ */
   const inputText = $("#inputText");
-  inputText.addEventListener("input", () => {
-    $("#charCount").textContent = inputText.value.length.toLocaleString("ja-JP") + "文字";
-  });
+  // 文字数は自動カウントのみ（上限の判定はしない）
+  function countInfo(t) {
+    const total = Array.from(t).length;
+    const noSpace = Array.from(t.replace(/\s/g, "")).length;
+    const paras = t.split(/\n+/).filter((x) => x.trim() !== "").length;
+    return { total, noSpace, paras };
+  }
+  function updateCount() {
+    const c = countInfo(inputText.value);
+    $("#charCount").innerHTML =
+      `<span class="big">${c.total.toLocaleString("ja-JP")}<small>文字</small></span>` +
+      `<span class="sub">空白・改行を除く${c.noSpace.toLocaleString("ja-JP")}文字／${c.paras}段落</span>`;
+  }
+  inputText.addEventListener("input", updateCount);
 
+  let fixedText = "";
+  let proofSourceText = "";
   function renderProofResults(text, issues, usedAi) {
+    proofSourceText = text;
     const out = $("#results");
     out.innerHTML = "";
 
@@ -465,6 +500,45 @@ ${text}`;
     renderSummary(out, issues.length, usedAi ? "ルールエンジン＋AI判断" : "ルールのみ（送信なし）");
     issues.forEach((is) => out.appendChild(makeIssueCard(is)));
     updateTally(out);
+
+    // 「修正後の本文」：採用した指摘をその場で反映して表示する
+    const fixed = document.createElement("div");
+    fixed.className = "fixed-panel";
+    fixed.innerHTML =
+      `<div class="fixed-head"><b>修正後の本文</b><span class="hint" style="margin:0">採用した指摘が反映されます</span><span class="sp"></span>
+         <button type="button" class="ghost" id="copyFixedBtn">本文をコピー</button></div>
+       <div class="fixed-body" id="fixedBody"></div>`;
+    out.appendChild(fixed);
+    const refresh = () => {
+      const adopted = $$(".issue", out).filter((c) => c.dataset.judge === "adopt");
+      const r = buildFixed(text, adopted.map((c) => ({ original: c.dataset.original, suggested: c.dataset.suggested })));
+      $("#fixedBody", out).innerHTML = r.html.replace(/\n/g, "<br>");
+      fixedText = r.text;
+    };
+    out.addEventListener("judgechange", refresh);
+    $("#copyFixedBtn", out).addEventListener("click", (e) => copyText(fixedText, e.currentTarget));
+    fixedText = text;
+    refresh();
+  }
+
+  /** 採用された指摘を本文に反映した結果（表示用HTMLと、コピー用テキスト）を作る */
+  function buildFixed(text, adopted) {
+    const ranges = [];
+    adopted.forEach((a) => {
+      if (!a.original) return;
+      const pos = text.indexOf(a.original);
+      if (pos !== -1) ranges.push({ s: pos, e: pos + a.original.length, to: a.suggested || "" });
+    });
+    ranges.sort((x, y) => x.s - y.s);
+    let html = "", out = "", cur = 0;
+    ranges.forEach((r) => {
+      if (r.s < cur) return;                   // 重なる指摘は先のものを優先
+      html += esc(text.slice(cur, r.s)) + `<del>${esc(text.slice(r.s, r.e))}</del>` + (r.to ? `<ins>${esc(r.to)}</ins>` : "");
+      out += text.slice(cur, r.s) + r.to;
+      cur = r.e;
+    });
+    html += esc(text.slice(cur)); out += text.slice(cur);
+    return { html, text: out };
   }
 
   $("#textRuleBtn").addEventListener("click", () => {
@@ -472,6 +546,7 @@ ${text}`;
     if (!text.trim()) { setStatus($("#statusText"), "本文を貼り付けてください"); return; }
     renderProofResults(text, RuleEngine.runDeterministicChecks(text), false);
     setStatus($("#statusText"), "ルールのみでチェックしました（送信なし）");
+    track("本文校正（ルールのみ）");
   });
 
   function updateTextButtons() {
@@ -479,7 +554,7 @@ ${text}`;
   }
   $("#maskText").addEventListener("change", updateTextButtons);
 
-  $("#runBtn").addEventListener("click", async () => {
+  async function runProofAI() {
     const text = inputText.value;
     const status = $("#statusText"), out = $("#results"), btn = $("#runBtn");
     if (!text.trim()) { setStatus(status, "本文を貼り付けてください"); return; }
@@ -492,13 +567,17 @@ ${text}`;
       const merged = RuleEngine.mergeIssues(RuleEngine.runDeterministicChecks(text), ai);
       renderProofResults(text, merged, true);
       setStatus(status, "完了しました");
+      track("本文校正");
     } catch (e) {
       renderError(out, e);
       setStatus(status, "エラーが発生しました");
+      return false;
     } finally {
       updateTextButtons();
     }
-  });
+    return true;
+  }
+  $("#runBtn").addEventListener("click", runProofAI);
 
   /* ============================================================
      ③ タイトル案
@@ -537,12 +616,12 @@ ${text}`;
            ${t.basis ? `<div>根拠：<b>${esc(t.basis)}</b></div>` : ""}
          </div>
          <div class="acts"><button type="button" class="ghost">タイトルをコピー</button></div>`;
-      $(".ghost", card).addEventListener("click", (e) => copyText(text, e.currentTarget));
+      $(".ghost", card).addEventListener("click", (e) => { chosenTitle = text; copyText(text, e.currentTarget); });
       out.appendChild(card);
     });
   }
 
-  $("#titleRunBtn").addEventListener("click", async () => {
+  async function runTitleAI() {
     const text = titleInput.value;
     const status = $("#titleStatus"), out = $("#titleResults"), btn = $("#titleRunBtn");
     if (!text.trim()) { setStatus(status, "本文を貼り付けてください"); return; }
@@ -554,13 +633,164 @@ ${text}`;
       const titles = Array.isArray(raw && raw.titles) ? raw.titles.filter((t) => t && t.text) : [];
       renderTitles(titles);
       setStatus(status, "完了しました");
+      track("タイトル案");
     } catch (e) {
       renderError(out, e);
       setStatus(status, "エラーが発生しました");
+      return false;
     } finally {
       updateTitleButtons();
     }
-  });
+    return true;
+  }
+  $("#titleRunBtn").addEventListener("click", runTitleAI);
+
+
+  /* ============================================================
+     利用の記録（名前・日時・機能・件数だけ。本文は送らない）
+     ============================================================ */
+  let suppressLog = false;
+  let chosenTitle = "";
+  function toast(msg) {
+    const t = document.createElement("div");
+    t.className = "toast";
+    t.innerHTML = `<i>✓</i><div>${esc(msg)}</div>`;
+    document.body.appendChild(t);
+    setTimeout(() => t.remove(), 2600);
+  }
+  async function track(action, count = 1) {
+    if (suppressLog) return;
+    if (await UsageLogger.log(action, count)) toast("利用を記録しました");
+  }
+  const userName = $("#userName");
+  userName.value = UsageLogger.getName();
+  userName.addEventListener("input", () => UsageLogger.setName(userName.value));
+
+  /* ============================================================
+     ⓪ まるごと貼り付け
+     ============================================================ */
+  const HEADS = [
+    { key: "survey", re: /^(アンケート結果|アンケート)$/ },
+    { key: "text",   re: /^(本文|体験記本文|体験記)$/ },
+    { key: "title",  re: /^(タイトル案|タイトル)$/ }
+  ];
+  /** 見出し行を目印に、アンケート／本文／タイトル案へ分ける（見出しが無い部分は捨てない） */
+  function splitAll(raw) {
+    const lines = String(raw || "").replace(/\r/g, "").split("\n");
+    const out = { survey: null, text: null, title: null };
+    let cur = null, buf = [];
+    const flush = () => { if (cur && out[cur] === null) out[cur] = buf.join("\n").trim(); buf = []; };
+    for (const line of lines) {
+      const h = HEADS.find((x) => x.re.test(line.trim()));
+      if (h) { flush(); cur = h.key; continue; }
+      if (cur) buf.push(line);
+    }
+    flush();
+    return out;
+  }
+
+  let allParts = { survey: null, text: null, title: null };
+
+  function renderDetect() {
+    const box = $("#allDetect");
+    if (!$("#allInput").value.trim()) { box.innerHTML = ""; return; }
+    const row = (ok, name, ct, hint) =>
+      `<div class="detect-row ${ok ? "" : "warn"}"><span class="ok">${ok ? "✓" : "!"}</span><span class="nm">${name}</span><span class="ct">${ct}${hint ? `<br><small>${hint}</small>` : ""}</span></div>`;
+    const sv = allParts.survey, tx = allParts.text, tt = allParts.title;
+    let h = "";
+    if (sv) {
+      const items = parseSurvey(sv); const blanks = items.filter((i) => !i.answer).length;
+      h += row(items.length > 0, "アンケート結果", `<b>${items.length}</b>項目（空欄${blanks}件）`);
+    } else h += row(false, "アンケート結果", "見つかりません", "見出し「アンケート結果」の行が必要です");
+    if (tx) h += row(true, "本文", `<b>${countInfo(tx).total.toLocaleString("ja-JP")}</b>文字`);
+    else h += row(false, "本文", "見つかりません", "見出し「本文」の行が必要です");
+    h += tt ? row(true, "タイトル案", "見つかりました") : row(false, "タイトル案", "見つかりません", "本文からAIがタイトル案を作ります");
+    box.innerHTML = h;
+  }
+
+  function applyAllParts() {
+    allParts = splitAll($("#allInput").value);
+    // 各タブの入力欄に振り分ける
+    $("#surveyInput").value = allParts.survey || "";
+    surveyItems = allParts.survey ? parseSurvey(allParts.survey) : [];
+    renderParsePreview(); updateSurveyButtons();
+    inputText.value = allParts.text || "";
+    updateCount();
+    titleInput.value = allParts.text || "";
+    titleInput.dispatchEvent(new Event("input"));
+    chosenTitle = allParts.title ? allParts.title.split("\n").map((x) => x.trim()).find(Boolean) || "" : "";
+    renderDetect();
+    updateAllButtons();
+  }
+  function updateAllButtons() {
+    const has = !!(allParts.survey || allParts.text);
+    $("#allRuleBtn").disabled = !has;
+    $("#allRunBtn").disabled = !has || (CONFIG.REQUIRE_MASK_CONFIRM && !$("#maskAll").checked);
+  }
+  $("#allInput").addEventListener("input", applyAllParts);
+  $("#maskAll").addEventListener("change", updateAllButtons);
+
+  const countIssues = (sel) => $$(".issue", $(sel)).length;
+
+  function renderAllSummary(usedAi) {
+    const out = $("#allResults");
+    out.innerHTML =
+      `<div class="all-links">
+         <button type="button" class="ghost" data-go="survey">アンケートの結果を見る（${countIssues("#surveyResults")}件）</button>
+         <button type="button" class="ghost" data-go="text">本文の結果を見る（${countIssues("#results")}件）</button>
+         ${usedAi ? '<button type="button" class="ghost" data-go="title">タイトル案を見る</button>' : ""}
+       </div>
+       <div class="card" id="copyPanel"></div>`;
+    $$("[data-go]", out).forEach((b) => b.addEventListener("click", () => showTab(b.dataset.go)));
+    renderCopyPanel();
+  }
+
+  /** 管理画面へ入力するための、項目別コピー欄 */
+  function renderCopyPanel() {
+    const panel = $("#copyPanel");
+    if (!panel) return;
+    const rows = [];
+    surveyItems.forEach((it) => { if (it.answer) rows.push({ lbl: it.question, val: it.answer }); });
+    const body = fixedText || inputText.value;
+    if (body.trim()) rows.push({ lbl: fixedText ? "本文（修正後）" : "本文", val: body });
+    if (chosenTitle) rows.push({ lbl: "タイトル", val: chosenTitle });
+    panel.innerHTML = `<div class="card-ttl">管理画面へ入力（コピー）</div><div class="copylist">${
+      rows.map((r, i) =>
+        `<div class="row"><span class="lbl">${esc(r.lbl)}</span><span class="val">${esc(r.val.replace(/\s+/g, " "))}</span><button type="button" class="ghost" data-i="${i}">コピー</button></div>`
+      ).join("") || '<div class="placeholder">コピーできる項目がありません。</div>'}</div>`;
+    $$("button[data-i]", panel).forEach((b) => b.addEventListener("click", async () => {
+      await copyText(rows[Number(b.dataset.i)].val, null);
+      b.textContent = "コピー済み"; b.classList.add("done");
+    }));
+  }
+
+  async function runAll(useAi) {
+    const status = $("#allStatus"), runBtn = $("#allRunBtn"), ruleBtn = $("#allRuleBtn");
+    runBtn.disabled = ruleBtn.disabled = true;
+    suppressLog = true;
+    try {
+      if (useAi) {
+        setStatus(status, "アンケートを確認しています", true);
+        if (surveyItems.length) await runSurveyAI();
+        setStatus(status, "本文を確認しています", true);
+        if (inputText.value.trim()) await runProofAI();
+        setStatus(status, "タイトル案を作っています", true);
+        if (titleInput.value.trim()) await runTitleAI();
+        setStatus(status, "完了しました");
+      } else {
+        if (surveyItems.length) $("#surveyRuleBtn").click();
+        if (inputText.value.trim()) $("#textRuleBtn").click();
+        setStatus(status, "ルールのみでチェックしました（送信なし）");
+      }
+      renderAllSummary(useAi);
+    } finally {
+      suppressLog = false;
+      updateAllButtons();
+    }
+    track(useAi ? "まるごと" : "まるごと（ルールのみ）");
+  }
+  $("#allRunBtn").addEventListener("click", () => runAll(true));
+  $("#allRuleBtn").addEventListener("click", () => runAll(false));
 
   /* ============================================================
      ルールエンジン自己テスト
