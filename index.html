@@ -135,11 +135,12 @@
       <div>
         <label for="model">モデル</label>
         <select id="model">
-          <option value="gemini-3.6-flash" selected>gemini-3.6-flash（標準・推奨）</option>
-          <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite（高速・大量処理向け）</option>
-          <option value="gemini-3.1-pro">gemini-3.1-pro（高精度・長文脈・低レート）</option>
+          <option value="gemini-3.5-flash-lite" selected>gemini-3.5-flash-lite（高速・標準）</option>
+          <option value="gemini-3.8-flash">gemini-3.8-flash（高精度・最新Flash）</option>
+          <option value="gemini-3.6-flash">gemini-3.6-flash（旧世代Flash）</option>
+          <option value="gemini-3.1-pro-preview">gemini-3.1-pro-preview（高精度・低レート）</option>
         </select>
-        <p class="hint">AIが動かない（404）ときは、体験記リーダーに連絡してください。</p>
+        <p class="hint">エラーが発生したときは、体験記リーダーにSlackで連絡してください。</p>
       </div>
     </div>
 
@@ -157,6 +158,7 @@
         <div class="privacy-ttl">個人情報の取り扱い</div>
         <p>AIチェックでは、貼り付けた文章がGoogleに送信されます。無料枠のデータはモデル改善に使われる場合があります。<b>生徒名・高校名・担任や友人の固有名詞は、貼る前に伏せ字</b>にしてください。</p>
         <p class="privacy-note">「ルールのみチェック」は、文章をどこにも送信しません。</p>
+        <b>生徒名・高校名・友人の実名などは、貼る前に伏せ字</b>にしてください。
         <p class="privacy-note">利用の記録：ツールを使うと、名前・日時・使った機能・処理件数がGoogleスプレッドシートに記録されます（本文・画像は記録されません）。</p>
       </div>
     </div>
@@ -183,7 +185,7 @@
             <label for="allInput" class="card-ttl">管理画面の表示をそのまま貼り付け</label>
             <textarea id="allInput" spellcheck="false" placeholder="アンケート結果&#10;入学学年&#10;高1&#10;掲載する&#10;…&#10;本文&#10;…&#10;タイトル案&#10;…"></textarea>
             <p class="hint">見出しの行（「アンケート結果」「本文」「タイトル案」）が見つからないときは、各タブに分けて貼り付けてください。</p>
-            <label class="gate"><input type="checkbox" id="maskAll"><span>生徒名・高校名・固有名詞を<b>伏せ字にしました</b></span></label>
+            <p class="hint">生徒名・高校名などの固有名詞が含まれる場合は、伏せ字にしてからご利用ください。</p>
             <div class="runbar">
               <button type="button" class="btn primary" id="allRunBtn" disabled>② 3つをまとめてチェック</button>
               <button type="button" class="btn ghost-btn" id="allRuleBtn" disabled>ルールのみ（送信なし）</button>
@@ -218,7 +220,7 @@
               <button type="button" class="btn ghost-btn" id="surveyRuleBtn" disabled>ルールのみ（送信なし）</button>
             </div>
 
-            <label class="gate"><input type="checkbox" id="maskSurvey"><span>生徒名・高校名・固有名詞を<b>伏せ字にしました</b></span></label>
+            <p class="hint">生徒名・高校名などの固有名詞が含まれる場合は、伏せ字にしてからご利用ください。</p>
             <div class="runbar">
               <button type="button" class="btn primary" id="surveyRunBtn" disabled>② AIでチェック</button>
               <span class="status" id="surveyStatus" aria-live="polite"></span>
@@ -250,7 +252,8 @@
             <div class="runbar">
               <button type="button" class="btn ghost-btn" id="textRuleBtn">ルールのみ（送信なし）</button>
             </div>
-            <label class="gate"><input type="checkbox" id="maskText"><span>生徒名・高校名・固有名詞を<b>伏せ字にしました</b></span></label>
+            
+            <p class="hint">生徒名・高校名などの固有名詞が含まれる場合は、伏せ字にしてからご利用ください。</p>
             <div class="runbar">
               <button type="button" class="btn primary" id="runBtn">AIでチェック</button>
               <span class="status" id="statusText" aria-live="polite"></span>
@@ -278,7 +281,7 @@
             <textarea id="titleInput" class="tall" spellcheck="false" placeholder="タイトルを付けたい本文を貼り付けてください"></textarea>
             <div class="countbar" id="titleCount">0文字</div>
 
-            <label class="gate"><input type="checkbox" id="maskTitle"><span>生徒名・高校名・固有名詞を<b>伏せ字にしました</b></span></label>
+            <p class="hint">生徒名・高校名などの固有名詞が含まれる場合は、伏せ字にしてからご利用ください。</p>
             <div class="runbar">
               <button type="button" class="btn primary" id="titleRunBtn">タイトル案を生成</button>
               <span class="status" id="titleStatus" aria-live="polite"></span>
