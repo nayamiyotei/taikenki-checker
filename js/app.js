@@ -680,13 +680,12 @@ ${text}`;
      ============================================================ */
   const HEADS = [
     { key: "survey", re: /^(アンケート結果|アンケート)$/ },
-    { key: "text",   re: /^(本文|体験記本文|体験記)$/ },
-    { key: "title",  re: /^(タイトル案|タイトル)$/ }
+    { key: "text",   re: /^(本文|体験記本文|体験記)$/ }
   ];
   /** 見出し行を目印に、アンケート／本文／タイトル案へ分ける（見出しが無い部分は捨てない） */
   function splitAll(raw) {
     const lines = String(raw || "").replace(/\r/g, "").split("\n");
-    const out = { survey: null, text: null, title: null };
+    const out = { survey: null, text: null };
     let cur = null, buf = [];
     const flush = () => { if (cur && out[cur] === null) out[cur] = buf.join("\n").trim(); buf = []; };
     for (const line of lines) {
@@ -698,14 +697,14 @@ ${text}`;
     return out;
   }
 
-  let allParts = { survey: null, text: null, title: null };
+  let allParts = { survey: null, text: null };
 
   function renderDetect() {
     const box = $("#allDetect");
     if (!$("#allInput").value.trim()) { box.innerHTML = ""; return; }
     const row = (ok, name, ct, hint) =>
       `<div class="detect-row ${ok ? "" : "warn"}"><span class="ok">${ok ? "✓" : "!"}</span><span class="nm">${name}</span><span class="ct">${ct}${hint ? `<br><small>${hint}</small>` : ""}</span></div>`;
-    const sv = allParts.survey, tx = allParts.text, tt = allParts.title;
+    const sv = allParts.survey, tx = allParts.text;
     let h = "";
     if (sv) {
       const items = parseSurvey(sv); const blanks = items.filter((i) => !i.answer).length;
@@ -713,7 +712,9 @@ ${text}`;
     } else h += row(false, "アンケート結果", "見つかりません", "見出し「アンケート結果」の行が必要です");
     if (tx) h += row(true, "本文", `<b>${countInfo(tx).total.toLocaleString("ja-JP")}</b>文字`);
     else h += row(false, "本文", "見つかりません", "見出し「本文」の行が必要です");
-    h += tt ? row(true, "タイトル案", "見つかりました") : row(false, "タイトル案", "見つかりません", "本文からAIがタイトル案を作ります");
+    h += tx
+      ? row(true, "タイトル案", "本文からAIが5案を作ります")
+      : row(false, "タイトル案", "作れません", "本文が見つからないため、タイトル案は作れません");
     box.innerHTML = h;
   }
 
@@ -727,7 +728,7 @@ ${text}`;
     updateCount();
     titleInput.value = allParts.text || "";
     titleInput.dispatchEvent(new Event("input"));
-    chosenTitle = allParts.title ? allParts.title.split("\n").map((x) => x.trim()).find(Boolean) || "" : "";
+    chosenTitle = "";   // タイトルは、AIの案から「タイトルをコピー」を押した1つが入る
     renderDetect();
     updateAllButtons();
   }
