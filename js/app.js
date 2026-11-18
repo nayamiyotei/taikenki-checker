@@ -579,7 +579,7 @@ ${text}`;
     } catch (e) {
       renderError(out, e);
       setStatus(status, "エラーが発生しました");
-      trackError("アンケート", e);   // 本文校正／タイトル案では、それぞれの名前に
+      trackError("本文校正", e);   // 本文校正／タイトル案では、それぞれの名前に
       return false;
     } finally {
       updateTextButtons();
@@ -596,7 +596,7 @@ ${text}`;
     $("#titleCount").textContent = titleInput.value.length.toLocaleString("ja-JP") + "文字";
   });
   function updateTitleButtons() {
-    $("#titleRunBtn").disabled = !has;
+  $("#titleRunBtn").disabled = false;
   }
 
   function renderTitles(titles) {
@@ -645,7 +645,7 @@ ${text}`;
     } catch (e) {
       renderError(out, e);
       setStatus(status, "エラーが発生しました");
-      trackError("アンケート", e);   // 本文校正／タイトル案では、それぞれの名前に
+      trackError("タイトル案", e);   // 本文校正／タイトル案では、それぞれの名前に
       return false;
     } finally {
       updateTitleButtons();
