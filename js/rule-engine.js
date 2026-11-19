@@ -217,6 +217,49 @@ const RuleEngine = (() => {
       });
   }
 
+  /* ---------- 文体（です・ます調／だ・である調）の判定 ---------- */
+
+  /** 1文の文体。判定できない文（体言止め・質問など）は null */
+  function sentenceStyle(s) {
+    const t = String(s || "")
+      .replace(/[「『（(][^」』）)]*[」』）)]/g, "")          // 引用・括弧内は数えない
+      .replace(/[。．！？!?…\s　]+$/g, "");
+    if (!t) return null;
+    if (/(です|ます|ました|ません|でした|でしょう|ましょう|ください|ですが|ますが|ですよね|ますよね)$/.test(t)) return "desu";
+    if (/(だ|である|だった|であった|のだ|ない|った|した|れた|いる|ある|する|なる|思う|考える|たい|べき|れる)$/.test(t)) return "da";
+    return null;
+  }
+
+  function splitSentences(text) {
+    return String(text || "").split(/(?<=[。！？!?])|\n+/).map((x) => x.trim()).filter(Boolean);
+  }
+
+  /** 文章全体の文体の集計。major は多数派（同数なら null） */
+  function docStyle(text) {
+    let desu = 0, da = 0;
+    splitSentences(text).forEach((s) => { const k = sentenceStyle(s); if (k === "desu") desu++; else if (k === "da") da++; });
+    return { desu, da, major: desu > da ? "desu" : da > desu ? "da" : null };
+  }
+
+  /**
+   * AIの「語尾の不統一」の指摘のうち、次のものを捨てる。
+   *  ・推測だけの指摘（「可能性があります」「かもしれません」）
+   *  ・多数派の文体で書かれている文への指摘（直すなら少数派の文のはず）
+   * ※「偉そうな言い切り口調」の指摘は別ルールなので、ここでは対象外
+   */
+  function dropWrongStyleIssues(issues, docText) {
+    const st = docStyle(docText);
+    return issues.filter((it) => {
+      const why = it.reason || "";
+      if (!/語尾|文体|です・ます|だ・である|常体|敬体/.test(why)) return true;
+      if (/偉そう|言い切り/.test(why)) return true;
+      if (/可能性|かもしれ|と思われ|疑い/.test(why)) return false;
+      if (!st.major) return true;
+      const kinds = splitSentences(it.original).map(sentenceStyle).filter(Boolean);
+      return kinds.some((k) => k !== st.major);          // 少数派の文を含むときだけ残す
+    });
+  }
+
   /** タイトル案などAI生成テキスト全般にも同じ強制を適用する */
   function enforceOnText(text) {
     return normalizeNumberWidth(text || "");
@@ -266,6 +309,14 @@ const RuleEngine = (() => {
           const r = cleanAiIssues([{ original: "良い。", suggested: "あ</br>い", reason: "r" }], () => "良い。");
           return r.length && !/br/.test(r[0].suggested) ? "タグを除く" : "残っている";
         } },
+      { input: "です・ます調の文を、AIが『だ・である調が混在している可能性』と指摘", expected: "捨てる", run: () => {
+          const doc = "私は頑張りました。毎日勉強しました。東京大学に合格しました。";
+          return dropWrongStyleIssues([{ original: "東京大学に合格しました。", suggested: "東京大学に合格した。", reason: "語尾が混在している可能性があります" }], doc).length ? "残っている" : "捨てる";
+        } },
+      { input: "だ・である調の文が1つ混ざっている場合", expected: "残す", run: () => {
+          const doc = "私は頑張りました。毎日勉強しました。結局合格した。東京大学に入学しました。";
+          return dropWrongStyleIssues([{ original: "結局合格した。", suggested: "結局合格しました。", reason: "語尾がです・ます調と混在しています" }], doc).length ? "残す" : "捨てる";
+        } },
       { input: "本文に無い original（全角に直して写された「６０」）", expected: "捨てる", run: () =>
           cleanAiIssues([{ original: "６０", suggested: "60" }], () => "点数は60点").length ? "残っている" : "捨てる" }
     ];
@@ -283,6 +334,9 @@ const RuleEngine = (() => {
     findPunctuationViolations,
     dropContainedIssues,
     cleanAiIssues,
+    sentenceStyle,
+    docStyle,
+    dropWrongStyleIssues,
     runDeterministicChecks,
     enforceOnAiIssues,
     enforceOnText,
