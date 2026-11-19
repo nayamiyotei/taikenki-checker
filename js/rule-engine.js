@@ -105,7 +105,7 @@ const RuleEngine = (() => {
         issues.push({
           category,
           original: wrong,
-          suggested: correct,
+          suggested: normalizeNumberWidth(correct),   // 1桁の数字は全角（例：「一番」→「１番」）
           reason: `${category}の統一ルールに一致しました${reasonSuffix || ""}`,
           source: "rule-engine"
         });
@@ -208,6 +208,8 @@ const RuleEngine = (() => {
       .filter((it) => {
         const o = it.original || "";
         if (!o) return false;
+        // 数字の全角／半角（および算用数字への統一）は、システム側で処理済み。AIの数字幅の指摘は捨てる
+        if (/[0-9０-９]/.test(o) && /全角|半角|算用数字/.test(it.reason || "")) return false;
         const src = getSource ? getSource(it) : "";
         if (src && !src.includes(o)) return false;
         const s = typeof it.suggested === "string" ? it.suggested : "";
