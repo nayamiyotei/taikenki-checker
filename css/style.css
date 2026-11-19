@@ -688,3 +688,5 @@ table.parsed td.blank{color:var(--ink-faint);font-style:italic;}
 .key-link svg{color:var(--pink-deep);}
 .key-link:hover{border-color:var(--pink);}
 .key-link{margin-bottom:14px;}
+
+.issue .diff .fix{white-space:pre-wrap;}
