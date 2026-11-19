@@ -315,7 +315,7 @@ ${text}`;
     bar.innerHTML =
       `<button type="button" class="ghost accent" data-bulk="adoptAll">すべて採用</button>
        <button type="button" class="ghost" data-bulk="rejectRest">未判断を不採用に</button>
-       <button type="button" class="ghost" data-bulk="undo">元に戻す</button>;
+       <button type="button" class="ghost" data-bulk="undo">元に戻す</button>`;
     container.appendChild(bar);
     $$("button[data-bulk]", bar).forEach((b) => b.addEventListener("click", () => {
       $$(".issue", container).forEach((c) => {
