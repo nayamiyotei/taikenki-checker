@@ -104,7 +104,8 @@ const CONFIG = {
 ・suggested は修正案。削除すべきものは空文字にする
 ・reason は、なぜ直すのかを1〜2文で
 ・actionOnPublish は、掲載前に「削除」が必要なものだけ true
-・迷う場合は、削除対象として指摘し、reason に迷った点を書く
+・迷う場合は、削除対象として指摘し、reason に迷った点を書く（ただし、講座名・コンテンツ名の疑いは下の決まりに従う）
+・講座名・コンテンツ名が正式名称でない可能性がある場合は、削除を提案しない。category を必ず「講座名の確認」にし、suggested には、確実に分かる正式名称がある場合だけ書く（推測では書かない。分からなければ空文字）。reason に、なぜ疑ったかを書く
 ・指摘がなければ issues は空配列
 ・創作や、元の文章にない内容の追加はしない
 ・original は、本文の文字を、全角・半角も含めて一字一句そのまま写す（直して写さない）
@@ -247,8 +248,9 @@ ${text}`;
   function makeIssueCard(issue) {
     const src = SRC[issue.source] || SRC.ai;
     const hasFix = typeof issue.suggested === "string" && issue.suggested.trim() !== "";
+    const isCheck = issue.category === "講座名の確認";          // 削除ではなく「正式名称を調べる」指摘
     const el = document.createElement("article");
-    el.className = "issue src-" + (issue.source || "ai");
+    el.className = "issue src-" + (issue.source || "ai") + (isCheck && !hasFix ? " no-adopt" : "");
     el.dataset.original = issue.original || "";
     el.dataset.suggested = hasFix ? issue.suggested : "";
 
@@ -256,14 +258,19 @@ ${text}`;
       `<div class="tags">
          <span class="tag cat">${esc(issue.category || "指摘")}</span>
          <span class="tag ${src.cls}">${src.label}</span>
-         ${issue.actionOnPublish || !hasFix ? '<span class="tag del">削除を検討</span>' : ""}
+         ${isCheck ? '<span class="tag del">要確認</span>' : (issue.actionOnPublish || !hasFix ? '<span class="tag del">削除を検討</span>' : "")}
        </div>
        <div class="diff">
          <span class="orig">${esc(issue.original)}</span>
          <span class="arrow">→</span>
-         ${hasFix ? `<span class="fix">${esc(issue.suggested)}</span>` : '<span class="none">（削除）</span>'}
+         ${isCheck
+            ? (hasFix ? `<span class="fix">候補：${esc(issue.suggested)}</span>` : '<span class="none">正式名称を調べてください</span>')
+            : (hasFix ? `<span class="fix">${esc(issue.suggested)}</span>` : '<span class="none">（削除）</span>')}
        </div>
        ${issue.reason ? `<p class="reason">${esc(issue.reason)}</p>` : ""}
+       ${isCheck ? `<p class="reason chk-note">${hasFix ? "AIが示した名称は推測の可能性があります。" : ""}東進の公式ページで、正式な講座名を確認してください。
+           <a class="chk-link" href="https://www.google.com/search?q=${encodeURIComponent("site:toshin.com " + (issue.original || ""))}" target="_blank" rel="noopener noreferrer">東進のサイト内で検索 ＞</a>
+           ${typeof COURSE_LIST_URL === "string" && COURSE_LIST_URL ? `<a class="chk-link" href="${esc(COURSE_LIST_URL)}" target="_blank" rel="noopener noreferrer">講座一覧を開く ＞</a>` : ""}</p>` : ""}
        <div class="judge" role="group" aria-label="判断">
          <button type="button" data-j="adopt"  aria-pressed="false">採用</button>
          <button type="button" data-j="reject" aria-pressed="false">不採用</button>
@@ -315,7 +322,7 @@ ${text}`;
     $$("button[data-bulk]", bar).forEach((b) => b.addEventListener("click", () => {
       $$(".issue", container).forEach((c) => {
         const j = c.dataset.judge || "";
-        if (b.dataset.bulk === "adoptAll") setJudge(c, "adopt");
+        if (b.dataset.bulk === "adoptAll") { if (!c.classList.contains("no-adopt")) setJudge(c, "adopt"); }
         else if (b.dataset.bulk === "rejectRest") { if (!j) setJudge(c, "reject"); }
         else setJudge(c, "");
       });
@@ -343,11 +350,7 @@ ${text}`;
     issues.forEach((is) => {
       const o = is.original;
       if (!o || typeof o !== "string") return;
-      let from = 0, pos;
-      while ((pos = text.indexOf(o, from)) !== -1) {
-        ranges.push({ s: pos, e: pos + o.length, src: is.source });
-        from = pos + o.length;
-      }
+      RuleEngine.findOccurrences(text, o).forEach(({ s, e }) => ranges.push({ s, e, src: is.source }));
     });
     ranges.sort((a, b) => a.s - b.s || b.e - a.e);
     const kept = [];
@@ -469,10 +472,10 @@ ${text}`;
     try {
       const raw = await GeminiClient.call(getApiKey(), getModel(), buildSurveyPrompt(surveyItems), "issues");
       const allAnswers = surveyItems.map((i) => i.answer).join("\n");
-      const aiIssues = RuleEngine.dropWrongStyleIssues(RuleEngine.cleanAiIssues(
+      const aiIssues = RuleEngine.dropWrongContextIssues(RuleEngine.dropWrongStyleIssues(RuleEngine.cleanAiIssues(
         RuleEngine.enforceOnAiIssues(RuleEngine.validateIssuesShape(raw)),
         (is) => { const it = surveyItems.find((i) => i.index === is.index);
-                  return it ? it.answer : allAnswers; }), allAnswers);
+                  return it ? it.answer : allAnswers; }), allAnswers), allAnswers);
       const aiByIndex = {};
       aiIssues.forEach((is) => {
         const idx = surveyItems.some((i) => i.index === is.index) ? is.index : 0;
@@ -550,7 +553,7 @@ ${text}`;
        <div class="fixed-body" id="fixedBody"></div>`;
     out.appendChild(fixed);
     const refresh = () => {
-      const adopted = $$(".issue", out).filter((c) => c.dataset.judge === "adopt");
+      const adopted = $$(".issue", out).filter((c) => c.dataset.judge === "adopt" && !c.classList.contains("no-adopt"));
       const r = buildFixed(text, adopted.map((c) => ({ original: c.dataset.original, suggested: c.dataset.suggested })));
       $("#fixedBody", out).innerHTML = r.html.replace(/\n/g, "<br>");
       fixedText = r.text;
@@ -566,11 +569,8 @@ ${text}`;
     const ranges = [];
     adopted.forEach((a) => {
       if (!a.original) return;
-      let from = 0, pos;
-      while ((pos = text.indexOf(a.original, from)) !== -1) {      // 同じ語は、本文中のすべての箇所を直す
-        ranges.push({ s: pos, e: pos + a.original.length, to: a.suggested || "" });
-        from = pos + a.original.length;
-      }
+      // 同じ語は、本文中のすべての箇所を直す（数字は、ひとまとまりの数として一致する箇所だけ）
+      RuleEngine.findOccurrences(text, a.original).forEach(({ s, e }) => ranges.push({ s, e, to: a.suggested || "" }));
     });
     ranges.sort((x, y) => x.s - y.s);
     let html = "", out = "", cur = 0;
@@ -606,8 +606,8 @@ ${text}`;
     renderLoading(out);
     try {
       const raw = await GeminiClient.call(getApiKey(), getModel(), buildProofPrompt(text), "issues");
-      const ai = RuleEngine.dropWrongStyleIssues(RuleEngine.cleanAiIssues(
-        RuleEngine.enforceOnAiIssues(RuleEngine.validateIssuesShape(raw)), () => text), text);
+      const ai = RuleEngine.dropWrongContextIssues(RuleEngine.dropWrongStyleIssues(RuleEngine.cleanAiIssues(
+        RuleEngine.enforceOnAiIssues(RuleEngine.validateIssuesShape(raw)), () => text), text), text);
       const merged = RuleEngine.mergeIssues(RuleEngine.runDeterministicChecks(text), ai);
       renderProofResults(text, merged, true);
       setStatus(status, "完了しました");
