@@ -112,6 +112,16 @@ const CONFIG = {
 ・修正前と同じ内容（全角・半角、句読点の見た目だけの違い）の指摘は出さない
 ・短い語句の指摘に対して、長い文章を新しく書き足す案は出さない`;
 
+/** 文章の語尾（です・ます／だ・である）をシステムが数えた結果を、AIに伝える */
+function styleNote(text) {
+  const st = RuleEngine.docStyle(text);
+  const nm = (k) => (k === "desu" ? "です・ます" : "だ・である");
+  return `【語尾の集計（システムが数えた結果）】
+です・ます調 ${st.desu}文／だ・である調 ${st.da}文
+${st.major ? `→ この文章は「${nm(st.major)}調」が多数派。語尾の指摘は、少数派の文だけにし、修正案は「${nm(st.major)}調」に合わせる。` : ""}
+全体がほぼ統一されている場合は、語尾の指摘をしない。「他の部分で混在している可能性」のような推測では指摘しない。`;
+}
+
 const AMBIGUOUS_NOTE =
 `【文脈で判断するコンテンツ名（講座名として書かれているときだけ指摘する。一般的な意味で使われているだけなら指摘しない）】
 ${LITERAL_RULES.ambiguousContentNames.map(([w, c, n]) => `・「${w}」→「${c}」（${n}）`).join("\n")}`;
@@ -136,6 +146,8 @@ ${COMMON_NOTE}
 
 ${AMBIGUOUS_NOTE}
 
+${styleNote(items.map((it) => it.answer).join("\n"))}
+
 ${OUTPUT_NOTE}
 ・index は、指摘した項目の番号（[ ] の中の数字）。question は、その項目の質問文
 
@@ -156,6 +168,8 @@ ${bullets(RULES.styleRules)}
 ${COMMON_NOTE}
 
 ${AMBIGUOUS_NOTE}
+
+${styleNote(text)}
 
 ${OUTPUT_NOTE}
 ・index と question は、使わない（省略してよい）
@@ -454,10 +468,11 @@ ${text}`;
     renderLoading(out);
     try {
       const raw = await GeminiClient.call(getApiKey(), getModel(), buildSurveyPrompt(surveyItems), "issues");
-      const aiIssues = RuleEngine.cleanAiIssues(
+      const allAnswers = surveyItems.map((i) => i.answer).join("\n");
+      const aiIssues = RuleEngine.dropWrongStyleIssues(RuleEngine.cleanAiIssues(
         RuleEngine.enforceOnAiIssues(RuleEngine.validateIssuesShape(raw)),
         (is) => { const it = surveyItems.find((i) => i.index === is.index);
-                  return it ? it.answer : surveyItems.map((i) => i.answer).join("\n"); });
+                  return it ? it.answer : allAnswers; }), allAnswers);
       const aiByIndex = {};
       aiIssues.forEach((is) => {
         const idx = surveyItems.some((i) => i.index === is.index) ? is.index : 0;
@@ -591,8 +606,8 @@ ${text}`;
     renderLoading(out);
     try {
       const raw = await GeminiClient.call(getApiKey(), getModel(), buildProofPrompt(text), "issues");
-      const ai = RuleEngine.cleanAiIssues(
-        RuleEngine.enforceOnAiIssues(RuleEngine.validateIssuesShape(raw)), () => text);
+      const ai = RuleEngine.dropWrongStyleIssues(RuleEngine.cleanAiIssues(
+        RuleEngine.enforceOnAiIssues(RuleEngine.validateIssuesShape(raw)), () => text), text);
       const merged = RuleEngine.mergeIssues(RuleEngine.runDeterministicChecks(text), ai);
       renderProofResults(text, merged, true);
       setStatus(status, "完了しました");
