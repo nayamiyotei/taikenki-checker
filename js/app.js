@@ -91,7 +91,8 @@ const CONFIG = {
 
   const COMMON_NOTE =
 `【システム側で別途処理するため、指摘不要のもの】
-・数字の全角／半角の統一
+・数字の全角／半角の統一（1桁は全角・2桁以上は半角）。数字の幅は、あなたは判断しない
+・句読点の種類（「、」と「，」など）
 ・NG講師名の検出
 ・コンテンツ名・用語の表記統一（辞書にあるもの）
 これら以外の、文脈の判断が必要なミスだけを指摘してください。`;
@@ -105,11 +106,16 @@ const CONFIG = {
 ・actionOnPublish は、掲載前に「削除」が必要なものだけ true
 ・迷う場合は、削除対象として指摘し、reason に迷った点を書く
 ・指摘がなければ issues は空配列
-・text は、タイトル案そのもの。必ず20字以内にする（最大でも25字）。出力する前に、自分で文字数を数えて確認すること
-・20字以内の案を、5案のうち4案以上にする。25字を超える案は、1つも出力しない
-・創作や、元の文章にない内容の追加はしない`;
+・創作や、元の文章にない内容の追加はしない
+・original は、本文の文字を、全角・半角も含めて一字一句そのまま写す（直して写さない）
+・suggested には、本文に入れる文字列だけを書く。HTMLタグ（<br>など）、注釈、括弧書きの説明は入れず、説明は reason に書く
+・修正前と同じ内容（全角・半角、句読点の見た目だけの違い）の指摘は出さない
+・短い語句の指摘に対して、長い文章を新しく書き足す案は出さない`;
 
-  
+const AMBIGUOUS_NOTE =
+`【文脈で判断するコンテンツ名（講座名として書かれているときだけ指摘する。一般的な意味で使われているだけなら指摘しない）】
+${LITERAL_RULES.ambiguousContentNames.map(([w, c, n]) => `・「${w}」→「${c}」（${n}）`).join("\n")}`;
+
   function buildSurveyPrompt(items) {
     const list = items
       .map((it) => `[${it.index}] 質問：${it.question}\n回答：${it.answer || "（空欄）"}`)
@@ -127,6 +133,8 @@ ${bullets(RULES.styleRules)}
 ${bullets(RULES.surveyRules)}
 
 ${COMMON_NOTE}
+
+${AMBIGUOUS_NOTE}
 
 ${OUTPUT_NOTE}
 ・index は、指摘した項目の番号（[ ] の中の数字）。question は、その項目の質問文
@@ -147,6 +155,8 @@ ${bullets(RULES.styleRules)}
 
 ${COMMON_NOTE}
 
+${AMBIGUOUS_NOTE}
+
 ${OUTPUT_NOTE}
 ・index と question は、使わない（省略してよい）
 
@@ -166,7 +176,8 @@ ${RULES.titleRules.format}
 
 【出力のきまり】
 ・JSONのみを返す。形式は {"titles":[{text, basis, priorityMatched}]}
-・text は、タイトル案そのもの
+・text は、タイトル案そのもの。必ず20字以内にする（どうしても収まらない場合のみ最大30字）。出力する前に、自分で文字数を数えて確認すること
+・20字以内の案を、5案のうち4案以上にする。30字を超える案は、1つも出力しない
 ・basis は、本文のどの部分から抜き出したか（本文の該当箇所を短く）
 ・priorityMatched は、上の優先順位のどれに当たるか
 ・同じ観点に偏らず、バランスよく選ぶ
@@ -443,7 +454,10 @@ ${text}`;
     renderLoading(out);
     try {
       const raw = await GeminiClient.call(getApiKey(), getModel(), buildSurveyPrompt(surveyItems), "issues");
-      const aiIssues = RuleEngine.enforceOnAiIssues(RuleEngine.validateIssuesShape(raw));
+      const aiIssues = RuleEngine.cleanAiIssues(
+        RuleEngine.enforceOnAiIssues(RuleEngine.validateIssuesShape(raw)),
+        (is) => { const it = surveyItems.find((i) => i.index === is.index);
+                  return it ? it.answer : surveyItems.map((i) => i.answer).join("\n"); });
       const aiByIndex = {};
       aiIssues.forEach((is) => {
         const idx = surveyItems.some((i) => i.index === is.index) ? is.index : 0;
@@ -537,8 +551,11 @@ ${text}`;
     const ranges = [];
     adopted.forEach((a) => {
       if (!a.original) return;
-      const pos = text.indexOf(a.original);
-      if (pos !== -1) ranges.push({ s: pos, e: pos + a.original.length, to: a.suggested || "" });
+      let from = 0, pos;
+      while ((pos = text.indexOf(a.original, from)) !== -1) {      // 同じ語は、本文中のすべての箇所を直す
+        ranges.push({ s: pos, e: pos + a.original.length, to: a.suggested || "" });
+        from = pos + a.original.length;
+      }
     });
     ranges.sort((x, y) => x.s - y.s);
     let html = "", out = "", cur = 0;
@@ -574,7 +591,8 @@ ${text}`;
     renderLoading(out);
     try {
       const raw = await GeminiClient.call(getApiKey(), getModel(), buildProofPrompt(text), "issues");
-      const ai = RuleEngine.enforceOnAiIssues(RuleEngine.validateIssuesShape(raw));
+      const ai = RuleEngine.cleanAiIssues(
+        RuleEngine.enforceOnAiIssues(RuleEngine.validateIssuesShape(raw)), () => text);
       const merged = RuleEngine.mergeIssues(RuleEngine.runDeterministicChecks(text), ai);
       renderProofResults(text, merged, true);
       setStatus(status, "完了しました");
@@ -599,7 +617,7 @@ ${text}`;
     $("#titleCount").textContent = titleInput.value.length.toLocaleString("ja-JP") + "文字";
   });
   function updateTitleButtons() {
-  $("#titleRunBtn").disabled = false;
+    $("#titleRunBtn").disabled = false;
   }
 
   function renderTitles(titles) {
@@ -642,22 +660,20 @@ ${text}`;
     try {
       const pick = (raw) => Array.isArray(raw && raw.titles) ? raw.titles.filter((t) => t && t.text) : [];
       const len = (t) => Array.from(RuleEngine.enforceOnText(t.text || "")).length;
-      
+
       let titles = pick(await GeminiClient.call(getApiKey(), getModel(), buildTitlePrompt(text), "titles"));
-      let ok = titles.filter((t) => len(t) <= CONFIG.TITLE_MAX);
-      
-      // 20字以内の案が3つ未満、または25字を超える案が混ざっていたら、1回だけやり直す
-      if (ok.length < titles.length || titles.filter((t) => len(t) <= CONFIG.TITLE_IDEAL).length < 3) {
+
+      // 30字を超える案が混ざっている、または20字以内の案が3つ未満なら、1回だけやり直す
+      if (titles.some((t) => len(t) > CONFIG.TITLE_MAX) ||
+          titles.filter((t) => len(t) <= CONFIG.TITLE_IDEAL).length < 3) {
         const retryPrompt = buildTitlePrompt(text) +
-          `\n\n【やり直し】前回の案は長すぎました。次の案は使わず、すべて20字以内（最大でも25字）で作り直してください。\n` +
+          `\n\n【やり直し】前回の案は長すぎました。次の案は使わず、すべて${CONFIG.TITLE_IDEAL}字以内（どうしても収まらない場合のみ最大${CONFIG.TITLE_MAX}字）で作り直してください。\n` +
           titles.map((t) => `・${t.text}（${len(t)}字）`).join("\n");
         const retry = pick(await GeminiClient.call(getApiKey(), getModel(), retryPrompt, "titles"));
         if (retry.length) titles = retry;
       }
-      // 最終的に、25字を超える案は表示しない
-      titles = titles.filter((t) => len(t) <= CONFIG.TITLE_MAX);
-      // 20字以内の案を上に並べる
-      titles.sort((a, b) => len(a) - len(b));
+      // 最終的に、上限を超える案は表示しない。短い案を上に並べる
+      titles = titles.filter((t) => len(t) <= CONFIG.TITLE_MAX).sort((a, b) => len(a) - len(b));
       renderTitles(titles);
       setStatus(status, "完了しました");
       track("タイトル案");
@@ -699,12 +715,13 @@ ${text}`;
      ============================================================ */
   const HEADS = [
     { key: "survey", re: /^(アンケート結果|アンケート)$/ },
-    { key: "text",   re: /^(本文|体験記本文|体験記)$/ }
+    { key: "text",   re: /^(本文|体験記本文|体験記)$/ },
+    { key: "title",  re: /^(タイトル案|タイトル)$/ }
   ];
   /** 見出し行を目印に、アンケート／本文／タイトル案へ分ける（見出しが無い部分は捨てない） */
   function splitAll(raw) {
     const lines = String(raw || "").replace(/\r/g, "").split("\n");
-    const out = { survey: null, text: null };
+    const out = { survey: null, text: null, title: null };
     let cur = null, buf = [];
     const flush = () => { if (cur && out[cur] === null) out[cur] = buf.join("\n").trim(); buf = []; };
     for (const line of lines) {
@@ -716,14 +733,14 @@ ${text}`;
     return out;
   }
 
-  let allParts = { survey: null, text: null };
+  let allParts = { survey: null, text: null, title: null };
 
   function renderDetect() {
     const box = $("#allDetect");
     if (!$("#allInput").value.trim()) { box.innerHTML = ""; return; }
     const row = (ok, name, ct, hint) =>
       `<div class="detect-row ${ok ? "" : "warn"}"><span class="ok">${ok ? "✓" : "!"}</span><span class="nm">${name}</span><span class="ct">${ct}${hint ? `<br><small>${hint}</small>` : ""}</span></div>`;
-    const sv = allParts.survey, tx = allParts.text;
+    const sv = allParts.survey, tx = allParts.text, tt = allParts.title;
     let h = "";
     if (sv) {
       const items = parseSurvey(sv); const blanks = items.filter((i) => !i.answer).length;
@@ -731,9 +748,7 @@ ${text}`;
     } else h += row(false, "アンケート結果", "見つかりません", "見出し「アンケート結果」の行が必要です");
     if (tx) h += row(true, "本文", `<b>${countInfo(tx).total.toLocaleString("ja-JP")}</b>文字`);
     else h += row(false, "本文", "見つかりません", "見出し「本文」の行が必要です");
-    h += tx
-      ? row(true, "タイトル案", "本文からAIが5案を作ります")
-      : row(false, "タイトル案", "作れません", "本文が見つからないため、タイトル案は作れません");
+    h += tt ? row(true, "タイトル案", "見つかりました") : row(false, "タイトル案", "見つかりません", "本文からAIがタイトル案を作ります");
     box.innerHTML = h;
   }
 
@@ -747,7 +762,7 @@ ${text}`;
     updateCount();
     titleInput.value = allParts.text || "";
     titleInput.dispatchEvent(new Event("input"));
-    chosenTitle = "";   // タイトルは、AIの案から「タイトルをコピー」を押した1つが入る
+    chosenTitle = allParts.title ? allParts.title.split("\n").map((x) => x.trim()).find(Boolean) || "" : "";
     renderDetect();
     updateAllButtons();
   }
