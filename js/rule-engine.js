@@ -55,8 +55,10 @@ const RuleEngine = (() => {
   function findNumberWidthViolations(text) {
     if (!text) return [];
     const violations = [];
+    const seen = new Set();   // 同じ数字は1件にまとめる（採用すると、単独で出てくる箇所がすべて直る）
 
     (text.match(/[０-９]{2,}/g) || []).forEach(m => {
+      if (seen.has(m)) return; seen.add(m);
       violations.push({
         category: "数字表記",
         original: m,
@@ -70,6 +72,7 @@ const RuleEngine = (() => {
     const singleDigitRegex = /(?<![0-9０-９.,])[0-9](?![0-9０-９.,])/g;
     let m;
     while ((m = singleDigitRegex.exec(text)) !== null) {
+      if (seen.has(m[0])) continue; seen.add(m[0]);
       violations.push({
         category: "数字表記",
         original: m[0],
@@ -260,6 +263,49 @@ const RuleEngine = (() => {
     });
   }
 
+  /* ---------- 出現位置の検索（数字は「ひとまとまりの数」として探す） ---------- */
+
+  /**
+   * text の中の original の出現位置 [{s,e}] を返す。
+   * original が数字だけのときは、前後が数字でない箇所だけを対象にする
+   * （例：「1」は「12月」「88」の中の1には一致しない）
+   */
+  function findOccurrences(text, original) {
+    const out = [];
+    if (!original) return out;
+    const digitsOnly = /^[0-9０-９]+$/.test(original);
+    const isDigit = (ch) => !!ch && /[0-9０-９]/.test(ch);
+    let from = 0, pos;
+    while ((pos = text.indexOf(original, from)) !== -1) {
+      from = pos + 1;
+      if (digitsOnly && (isDigit(text[pos - 1]) || isDigit(text[pos + original.length]))) continue;
+      out.push({ s: pos, e: pos + original.length });
+      from = pos + original.length;
+    }
+    return out;
+  }
+
+  /**
+   * AIが「共通テスト対策」の名前に直そうとしたが、直前の文脈が二次試験の話のときは捨てる
+   * （例：「２次試験の過去問演習講座」→「過去問演習講座大学入学共通テスト対策」は誤り）
+   */
+  function dropWrongContextIssues(issues, docText) {
+    const text = String(docText || "");
+    return issues.filter((it) => {
+      const o = it.original || "", s = typeof it.suggested === "string" ? it.suggested : "";
+      if (!o || !s.includes("共通テスト") || o.includes("共通テスト")) return true;
+      const occ = findOccurrences(text, o);
+      if (!occ.length) return true;
+      // すべての出現が二次試験の文脈なら捨てる
+      return !occ.every(({ s: pos }) => {
+        const before = NFKC(text.slice(Math.max(0, pos - 14), pos));
+        const a = Math.max(before.lastIndexOf("共通テスト"), before.lastIndexOf("共テ"), before.lastIndexOf("センター"));
+        const b = Math.max(before.lastIndexOf("2次"), before.lastIndexOf("二次"), before.lastIndexOf("個別試験"));
+        return b > a;
+      });
+    });
+  }
+
   /** タイトル案などAI生成テキスト全般にも同じ強制を適用する */
   function enforceOnText(text) {
     return normalizeNumberWidth(text || "");
@@ -317,6 +363,12 @@ const RuleEngine = (() => {
           const doc = "私は頑張りました。毎日勉強しました。結局合格した。東京大学に入学しました。";
           return dropWrongStyleIssues([{ original: "結局合格した。", suggested: "結局合格しました。", reason: "語尾がです・ます調と混在しています" }], doc).length ? "残す" : "捨てる";
         } },
+      { input: "「12月」「88」の中の「1」は、単独の「1」として扱わない", expected: "2箇所（単独の1だけ）", run: () => {
+          const n = findOccurrences("1番と12月と88と1点", "1").length;
+          return n === 2 ? "2箇所（単独の1だけ）" : n + "箇所"; } },
+      { input: "２次試験の過去問演習講座を、AIが共通テスト対策の名前に直そうとした", expected: "捨てる", run: () =>
+          dropWrongContextIssues([{ original: "過去問演習講座", suggested: "過去問演習講座大学入学共通テスト対策" }],
+            "共通テストと２次試験の過去問演習講座の結果をもとに").length ? "残っている" : "捨てる" },
       { input: "本文に無い original（全角に直して写された「６０」）", expected: "捨てる", run: () =>
           cleanAiIssues([{ original: "６０", suggested: "60" }], () => "点数は60点").length ? "残っている" : "捨てる" }
     ];
@@ -334,6 +386,8 @@ const RuleEngine = (() => {
     findPunctuationViolations,
     dropContainedIssues,
     cleanAiIssues,
+    findOccurrences,
+    dropWrongContextIssues,
     sentenceStyle,
     docStyle,
     dropWrongStyleIssues,
