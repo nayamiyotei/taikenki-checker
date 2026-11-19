@@ -83,11 +83,25 @@ const RuleEngine = (() => {
 
   /* ---------- 辞書ベースの完全一致検出（NG講師名・表記統一・用語） ---------- */
 
+  /** wrong が、正しい表記(correct)の一部として使われているだけの出現を除いて、まだ出現するか（例：「モチベーション」の中の「モチベ」は除く） */
+  function occursOutsideCorrect(text, wrong, correct) {
+    let from = 0, pos;
+    while ((pos = text.indexOf(wrong, from)) !== -1) {
+      from = pos + 1;
+      let inside = false, j = -1;
+      while ((j = correct.indexOf(wrong, j + 1)) !== -1) {
+        if (pos - j >= 0 && text.substr(pos - j, correct.length) === correct) { inside = true; break; }
+      }
+      if (!inside) return true;
+    }
+    return false;
+  }
+
   function findLiteralPairViolations(text, pairs, category, reasonSuffix) {
     if (!text) return [];
     const issues = [];
     pairs.forEach(([wrong, correct]) => {
-      if (wrong && text.includes(wrong)) {
+      if (wrong && occursOutsideCorrect(text, wrong, correct)) {
         issues.push({
           category,
           original: wrong,
@@ -113,18 +127,49 @@ const RuleEngine = (() => {
       }));
   }
 
+  /** 「，」「､」→「、」、「．」「｡」→「。」。文字の種類ごとに1件だけ報告する */
+  function findPunctuationViolations(text) {
+    if (!text) return [];
+    const rules = [
+      [/[，､]/g, "、", "読点は「、」に統一します"],
+      [/(?<=[\u3040-\u30ff\u4e00-\u9fff]),/g, "、", "日本語の文中の「,」は「、」にします"],
+      [/[．｡]/g, "。", "句点は「。」に統一します"]
+    ];
+    const seen = new Set(), out = [];
+    rules.forEach(([re, to, why]) => {
+      let m;
+      while ((m = re.exec(text)) !== null) {
+        if (seen.has(m[0])) continue;
+        seen.add(m[0]);
+        out.push({ category: "句読点", original: m[0], suggested: to, reason: why, source: "rule-engine" });
+      }
+    });
+    return out;
+  }
+
+  /** 長い指摘の範囲に完全に含まれる短い指摘を除く（例：「高速マスター基礎力養成講座」と「高速マスター」） */
+  function dropContainedIssues(issues, text) {
+    const spans = (s) => { const r = []; let i = -1; while ((i = text.indexOf(s, i + 1)) !== -1) r.push([i, i + s.length]); return r; };
+    const info = issues.map((is) => ({ is, sp: is.original ? spans(is.original) : [] }));
+    return info.filter((a) => !info.some((b) =>
+      b !== a && a.is.original && b.is.original && b.is.original.length > a.is.original.length &&
+      a.sp.length && a.sp.every(([s, e]) => b.sp.some(([bs, be]) => bs <= s && e <= be))
+    )).map((x) => x.is);
+  }
+
   /**
-   * 決定的ルール（数字表記・NG講師名・コンテンツ名・用語）をまとめて実行する。
+   * 決定的ルール（数字表記・NG講師名・コンテンツ名・用語・句読点）をまとめて実行する。
    * このファイル単体でAI無しでも一次スクリーニングができる。
    */
   function runDeterministicChecks(text) {
     if (!text) return [];
-    return [
+    return dropContainedIssues([
       ...findNgTeacherViolations(text),
       ...findLiteralPairViolations(text, LITERAL_RULES.contentNamePairs, "コンテンツ名"),
       ...findLiteralPairViolations(text, LITERAL_RULES.wordPairs, "用語"),
+      ...findPunctuationViolations(text),
       ...findNumberWidthViolations(text)
-    ];
+    ], text);
   }
 
   /* ---------- AI出力の後段強制（ここが今回のバグの直接対策） ---------- */
@@ -140,6 +185,34 @@ const RuleEngine = (() => {
       suggested: typeof it.suggested === "string" ? normalizeNumberWidth(it.suggested) : it.suggested,
       source: "ai"
     }));
+  }
+
+  const NFKC = (s) => String(s || "").normalize("NFKC");
+  const cleanText = (s) => typeof s === "string"
+    ? s.replace(/<\s*\/?\s*br\s*\/?\s*>/gi, "\n").replace(/<[^>]+>/g, "")
+    : s;
+
+  /**
+   * AIが返した指摘を整える。
+   *  ・<br> などのHTMLタグは、改行にする／除く
+   *  ・original が本文に存在しない指摘を捨てる（AIが全角・半角などを勝手に直して写したもの）
+   *  ・修正前後が実質同じ（NFKCで同じ）指摘を捨てる（全角↔半角、句読点の見た目の違いだけ）
+   * @param {(issue)=>string} getSource その指摘の元になった文章を返す関数
+   */
+  function cleanAiIssues(aiIssues, getSource) {
+    return aiIssues
+      .map((it) => ({ ...it, original: cleanText(it.original),
+      // 修正案に紛れ込んだ「（※…）」の注釈は、本文に入れる文字列ではないので除く
+      suggested: typeof it.suggested === "string" ? cleanText(it.suggested).replace(/\s*[（(]※[^）)]*[）)]/g, "").trim() : it.suggested,
+      reason: cleanText(it.reason) }))
+      .filter((it) => {
+        const o = it.original || "";
+        if (!o) return false;
+        const src = getSource ? getSource(it) : "";
+        if (src && !src.includes(o)) return false;
+        const s = typeof it.suggested === "string" ? it.suggested : "";
+        return NFKC(s) !== NFKC(o);
+      });
   }
 
   /** タイトル案などAI生成テキスト全般にも同じ強制を適用する */
@@ -175,23 +248,29 @@ const RuleEngine = (() => {
   /* ---------- 自己テスト（画面上のQAパネルから実行できる軽量アサーション） ---------- */
 
   function selfTest() {
+    const origins = (t) => runDeterministicChecks(t).map((h) => h.original);
     const cases = [
-      { input: "5個の講座を受けました", expect: "５個の講座を受けました" },
-      { input: "１２個の講座", expect: "12個の講座" }, // 全角2桁→半角
-      { input: "1.5倍伸びた", expect: "1.5倍伸びた" }, // 小数はそのまま(2桁扱い)
-      { input: "1番好きな講座", expect: "１番好きな講座" },
-      { input: "モチベが上がった", expectIncludes: "モチベーション" }
+      { input: "5個の講座を受けました", expected: "５個の講座を受けました", run: (t) => normalizeNumberWidth(t) },
+      { input: "１２個の講座", expected: "12個の講座", run: (t) => normalizeNumberWidth(t) },
+      { input: "1.5倍伸びた", expected: "1.5倍伸びた", run: (t) => normalizeNumberWidth(t) },
+      { input: "1番好きな講座", expected: "１番好きな講座", run: (t) => normalizeNumberWidth(t) },
+      { input: "モチベが上がった", expected: "「モチベ」を検出", run: (t) => origins(t).includes("モチベ") ? "「モチベ」を検出" : "検出なし" },
+      { input: "モチベーションが上がった", expected: "検出なし", run: (t) => origins(t).includes("モチベ") ? "誤検出" : "検出なし" },
+      { input: "高速マスター基礎力養成講座を使った", expected: "1件（長い方だけ）", run: (t) => origins(t).length + "件" + (origins(t).length === 1 ? "（長い方だけ）" : "") },
+      { input: "志望校対策を早めに始めた", expected: "検出なし（文脈判断はAI）", run: (t) => origins(t).includes("志望校対策") ? "誤検出" : "検出なし（文脈判断はAI）" },
+      { input: "勉強，睡眠", expected: "「，」を検出", run: (t) => origins(t).includes("，") ? "「，」を検出" : "検出なし" },
+      { input: "勉強、睡眠", expected: "検出なし", run: (t) => origins(t).filter((o) => /[，,､]/.test(o)).length ? "誤検出" : "検出なし" },
+      { input: "AIが返した <br> 入りの案", expected: "タグを除く", run: () => {
+          const r = cleanAiIssues([{ original: "良い。", suggested: "あ</br>い", reason: "r" }], () => "良い。");
+          return r.length && !/br/.test(r[0].suggested) ? "タグを除く" : "残っている";
+        } },
+      { input: "本文に無い original（全角に直して写された「６０」）", expected: "捨てる", run: () =>
+          cleanAiIssues([{ original: "６０", suggested: "60" }], () => "点数は60点").length ? "残っている" : "捨てる" }
     ];
-    const results = cases.map(c => {
-      if (c.expect !== undefined) {
-        const actual = normalizeNumberWidth(c.input);
-        return { input: c.input, expected: c.expect, actual, pass: actual === c.expect };
-      }
-      const hits = findLiteralPairViolations(c.input, LITERAL_RULES.wordPairs, "用語");
-      const pass = hits.some(h => h.suggested.includes(c.expectIncludes));
-      return { input: c.input, expected: `${c.expectIncludes}を検出`, actual: JSON.stringify(hits), pass };
+    return cases.map((c) => {
+      const actual = c.run(c.input);
+      return { input: c.input, expected: c.expected, actual, pass: actual === c.expected };
     });
-    return results;
   }
 
   return {
@@ -199,6 +278,9 @@ const RuleEngine = (() => {
     findNumberWidthViolations,
     findNgTeacherViolations,
     findLiteralPairViolations,
+    findPunctuationViolations,
+    dropContainedIssues,
+    cleanAiIssues,
     runDeterministicChecks,
     enforceOnAiIssues,
     enforceOnText,
