@@ -315,9 +315,7 @@ ${text}`;
     bar.innerHTML =
       `<button type="button" class="ghost accent" data-bulk="adoptAll">すべて採用</button>
        <button type="button" class="ghost" data-bulk="rejectRest">未判断を不採用に</button>
-       <button type="button" class="ghost" data-bulk="undo">元に戻す</button>
-       <button type="button" class="ghost" data-copy="adopt">採用した修正をコピー</button>
-       <button type="button" class="ghost" data-copy="all">すべての指摘をコピー</button>`;
+       <button type="button" class="ghost" data-bulk="undo">元に戻す</button>;
     container.appendChild(bar);
     $$("button[data-bulk]", bar).forEach((b) => b.addEventListener("click", () => {
       $$(".issue", container).forEach((c) => {
@@ -326,13 +324,6 @@ ${text}`;
         else if (b.dataset.bulk === "rejectRest") { if (!j) setJudge(c, "reject"); }
         else setJudge(c, "");
       });
-    }));
-    $$("button[data-copy]", bar).forEach((b) => b.addEventListener("click", () => {
-      const cards = $$(".issue", container).filter((c) =>
-        b.dataset.copy === "all" ? true : c.dataset.judge === "adopt");
-      const text = cards.map((c) =>
-        `${c.dataset.original} → ${c.dataset.suggested || "（削除）"}`).join("\n");
-      copyText(text || "（該当なし）", b);
     }));
   }
 
