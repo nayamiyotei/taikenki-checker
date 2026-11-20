@@ -639,7 +639,7 @@ ${text}`;
       const text = RuleEngine.enforceOnText(t.text || "");
       const n = Array.from(text).length;
       const lenCls = n > CONFIG.TITLE_MAX ? "long" : n > CONFIG.TITLE_IDEAL ? "over" : "";
-      const lenTxt = n > CONFIG.TITLE_MAX ? `${n}字（長すぎ）` : n > CONFIG.TITLE_IDEAL ? `${n}字（理想超え）` : `${n}字`;
+      const lenTxt = n > CONFIG.TITLE_MAX ? `${n}字（長すぎ）` : n > CONFIG.TITLE_IDEAL ? `${n}字（文字数多め）` : `${n}字`;
       const card = document.createElement("article");
       card.className = "title-card";
       card.innerHTML =
