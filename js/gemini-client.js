@@ -124,5 +124,18 @@ const GeminiClient = (() => {
     return extractJson(raw);
   }
 
-  return { call };
+  return { call: callWithRetry, /* 他は元のまま */ };
 })();
+
+async function callWithRetry(apiKey, model, prompt, kind) {
+  const waits = [2000, 5000, 10000];            // 待ち時間（ミリ秒）
+  for (let i = 0; ; i++) {
+    try {
+      return await call(apiKey, model, prompt, kind);
+    } catch (e) {
+      const busy = /\((503|429)\)|503|429/.test(String(e && e.message));
+      if (!busy || i >= waits.length) throw e;
+      await new Promise((r) => setTimeout(r, 1500));
+    }
+  }
+}
