@@ -754,7 +754,9 @@ ${text}`;
     } else h += row(false, "アンケート結果", "見つかりません", "見出し「アンケート結果」の行が必要です");
     if (tx) h += row(true, "本文", `<b>${countInfo(tx).total.toLocaleString("ja-JP")}</b>文字`);
     else h += row(false, "本文", "見つかりません", "見出し「本文」の行が必要です");
-    h += tt ? row(true, "タイトル案", "見つかりました") : row(false, "タイトル案", "見つかりません", "本文からAIがタイトル案を作ります");
+    h += tt
+      ? row(true, "タイトル案", "見つかりました")
+      : row(true, "タイトル案", "AIが本文から作成します");
     box.innerHTML = h;
   }
 
