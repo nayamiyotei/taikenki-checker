@@ -88,12 +88,13 @@ const GeminiClient = (() => {
   }
 
   /**
+   * 1回だけ呼び出す（再試行なし）
    * @param {string} apiKey
    * @param {string} model
    * @param {string} prompt
    * @param {"issues"|"titles"} schemaKind - 期待する出力スキーマ
    */
-  async function call(apiKey, model, prompt, schemaKind = "issues") {
+  async function callOnce(apiKey, model, prompt, schemaKind = "issues") {
     const safeApiKey = toHeaderSafeAscii(apiKey, "APIキー");
     const safeModel = toHeaderSafeAscii(model, "モデル名");
     const schema = schemaKind === "titles" ? TITLES_SCHEMA : ISSUES_SCHEMA;
@@ -113,10 +114,12 @@ const GeminiClient = (() => {
     );
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(
+      const err = new Error(
         `APIエラー（${res.status}）: ${errText.slice(0, 400)}\n\n` +
         `※404の場合はモデル名が廃止されている可能性があります。エラー本文中の推奨モデル名に「モデル」欄のvalue値を書き換えてください。`
       );
+      err.status = res.status;
+      throw err;
     }
     const json = await res.json();
     const raw = json?.candidates?.[0]?.content?.parts?.map(p => p.text || "").join("") || "";
@@ -124,18 +127,24 @@ const GeminiClient = (() => {
     return extractJson(raw);
   }
 
-  return { call: callWithRetry, /* 他は元のまま */ };
-})();
+  /**
+   * 混雑・一時的な障害（429/500/502/503/504）のときだけ、
+   * 待ってから自動で再試行する。それ以外のエラーはすぐ投げる。
+   */
+  const RETRY_STATUS = [429, 500, 502, 503, 504];
+  const RETRY_WAITS = [2000, 5000, 10000]; // ミリ秒。最大3回やり直す
 
-async function callWithRetry(apiKey, model, prompt, kind) {
-  const waits = [2000, 5000, 10000];            // 待ち時間（ミリ秒）
-  for (let i = 0; ; i++) {
-    try {
-      return await call(apiKey, model, prompt, kind);
-    } catch (e) {
-      const busy = /\((503|429)\)|503|429/.test(String(e && e.message));
-      if (!busy || i >= waits.length) throw e;
-      await new Promise((r) => setTimeout(r, 1500));
+  async function call(apiKey, model, prompt, schemaKind = "issues") {
+    for (let i = 0; ; i++) {
+      try {
+        return await callOnce(apiKey, model, prompt, schemaKind);
+      } catch (e) {
+        const retryable = RETRY_STATUS.includes(e && e.status);
+        if (!retryable || i >= RETRY_WAITS.length) throw e;
+        await new Promise((r) => setTimeout(r, RETRY_WAITS[i]));
+      }
     }
   }
-}
+
+  return { call };
+})();
