@@ -61,7 +61,7 @@ const GeminiClient = (() => {
   function toHeaderSafeAscii(value, label) {
     let v = String(value == null ? "" : value)
       .normalize("NFKC")                         // 全角英数字・記号を半角に正規化
-      .replace(/[\u200B-\u200D\uFEFF\u00A0]/g, "") // ゼロ幅文字・BOM・ノーブレークスペース除去
+      .replace(/[​-‍﻿ ]/g, "") // ゼロ幅文字・BOM・ノーブレークスペース除去
       .trim();
     if (/[^\x00-\xFF]/.test(v)) {
       throw new Error(
@@ -85,6 +85,16 @@ const GeminiClient = (() => {
       throw new Error("JSON部分が見つかりませんでした。モデルの応答:\n" + raw.slice(0, 500));
     }
     return JSON.parse(s.slice(start, end + 1));
+  }
+
+  /** 429（無料枠の上限）のエラー文から、待ち時間（秒）と「1日の上限か」を読み取る */
+  function parseQuota(errText) {
+    const t = String(errText || "");
+    let sec = null;
+    const m = t.match(/retry in ([\d.]+)\s*s/i) || t.match(/"retryDelay"\s*:\s*"([\d.]+)s"/i);
+    if (m) sec = Math.ceil(parseFloat(m[1]));
+    const daily = /PerDay/i.test(t) || /per day/i.test(t);
+    return { sec, daily };
   }
 
   /**
@@ -114,11 +124,13 @@ const GeminiClient = (() => {
     );
     if (!res.ok) {
       const errText = await res.text();
-      const err = new Error(
-        `APIエラー（${res.status}）: ${errText.slice(0, 400)}\n\n` +
-        `※404の場合はモデル名が廃止されている可能性があります。エラー本文中の推奨モデル名に「モデル」欄のvalue値を書き換えてください。`
-      );
+      const q = res.status === 429 ? parseQuota(errText) : null;
+      const hint = res.status === 429
+        ? `\n\n※429は、Googleの無料枠の上限（回数・文字量）です。${q.daily ? "「1日の上限」に達している可能性があります。明日になるか、別のモデルに切り替えてください。" : "1分ほど待ってから、もう一度押してください。続く場合は「モデル」を別のものに切り替えてください。"}`
+        : `\n\n※404の場合はモデル名が廃止されている可能性があります。エラー本文中の推奨モデル名に「モデル」欄のvalue値を書き換えてください。`;
+      const err = new Error(`APIエラー（${res.status}）: ${errText.slice(0, 400)}${hint}`);
       err.status = res.status;
+      if (q) { err.retrySec = q.sec; err.daily = q.daily; }
       throw err;
     }
     const json = await res.json();
@@ -127,24 +139,38 @@ const GeminiClient = (() => {
     return extractJson(raw);
   }
 
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
   /**
-   * 混雑・一時的な障害（429/500/502/503/504）のときだけ、
-   * 待ってから自動で再試行する。それ以外のエラーはすぐ投げる。
+   * 一時的な混雑（500/502/503/504）は、2秒・5秒・10秒待って最大3回やり直す。
+   * 429（無料枠の上限）は、1日の上限ならすぐ諦め、1分あたりの上限なら、
+   * Googleが指定した秒数（最大65秒）だけ待って、1回だけやり直す。
    */
-  const RETRY_STATUS = [429, 500, 502, 503, 504];
-  const RETRY_WAITS = [2000, 5000, 10000]; // ミリ秒。最大3回やり直す
+  const BUSY_STATUS = [500, 502, 503, 504];
+  const BUSY_WAITS = [2000, 5000, 10000];
 
   async function call(apiKey, model, prompt, schemaKind = "issues") {
-    for (let i = 0; ; i++) {
+    let busyTry = 0, quotaTry = 0;
+    for (;;) {
       try {
         return await callOnce(apiKey, model, prompt, schemaKind);
       } catch (e) {
-        const retryable = RETRY_STATUS.includes(e && e.status);
-        if (!retryable || i >= RETRY_WAITS.length) throw e;
-        await new Promise((r) => setTimeout(r, RETRY_WAITS[i]));
+        const st = e && e.status;
+        if (BUSY_STATUS.includes(st) && busyTry < BUSY_WAITS.length) {
+          await sleep(BUSY_WAITS[busyTry++]);
+          continue;
+        }
+        if (st === 429 && !e.daily && quotaTry < 1) {
+          quotaTry++;
+          const sec = Math.min(Math.max((e.retrySec || 30) + 2, 5), 65);
+          if (typeof GeminiClient !== "undefined" && GeminiClient.onWait) GeminiClient.onWait(sec);
+          await sleep(sec * 1000);
+          continue;
+        }
+        throw e;
       }
     }
   }
 
-  return { call };
+  return { call, onWait: null };
 })();
