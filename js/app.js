@@ -646,7 +646,8 @@ ${text}`;
     $("#titleRunBtn").disabled = false;
   }
 
-  function renderTitles(titles) {
+  function renderTitles(titles, lim) {
+    const ideal = lim ? lim.ideal : CONFIG.TITLE_IDEAL, maxLen = lim ? lim.max : CONFIG.TITLE_MAX;
     const out = $("#titleResults");
     out.innerHTML = "";
     if (!titles.length) {
@@ -658,8 +659,8 @@ ${text}`;
     titles.forEach((t, i) => {
       const text = RuleEngine.enforceOnText(t.text || "");
       const n = Array.from(text).length;
-      const lenCls = n > CONFIG.TITLE_MAX ? "long" : n > CONFIG.TITLE_IDEAL ? "over" : "";
-      const lenTxt = n > CONFIG.TITLE_MAX ? `${n}字（長すぎ）` : n > CONFIG.TITLE_IDEAL ? `${n}字（文字数多め）` : `${n}字`;
+      const lenCls = n > maxLen ? "long" : n > ideal ? "over" : "";
+      const lenTxt = n > maxLen ? `${n}字（長すぎ）` : n > ideal ? `${n}字（文字数多め）` : `${n}字`;
       const card = document.createElement("article");
       card.className = "title-card";
       card.innerHTML =
@@ -687,12 +688,12 @@ ${text}`;
   ];
   function localTitleCandidates(text) {
     const body = String(text).replace(/\s+/g, "");
-    const max = CONFIG.TITLE_MAX;
+    const MIN = 15, max = 35;                // AIなしの抜き出しは、意味が通るよう15〜35字にする
     const cands = new Set();
     const add = (s) => {
       s = String(s || "").replace(/^[、，,「『（(]+|[。！？!?、，,」』）)]+$/g, "").trim();
       const n = Array.from(s).length;
-      if (n >= 10 && n <= max) cands.add(s);
+      if (n >= MIN && n <= max) cands.add(s);
     };
     // ①「…」で囲まれた言葉（名言・キーワード）
     (body.match(/「([^「」]{6,30})」/g) || []).forEach((q) => add(q.slice(1, -1)));
@@ -715,9 +716,11 @@ ${text}`;
       const finite = /(ました|ます|です|でした|ません|ない|った|した|れた|いた|えた|ある|いる|れる|する|なる|思う|たい|べき|こと|もの|だ|う)$/.test(s);
       const noun = /[\u4e00-\u9fff\u30a0-\u30ffA-Za-z0-9０-９]$/.test(s);
       if (!finite && !noun) return null;
+      if (Array.from(s.split(/[、，,]/).pop()).length < 6) return null;   // 読点のあとが短すぎる（途中で切れている）
+      if (/[0-9０-９]$/.test(s)) return null;
       if (/(ので|けど|ながら|たり|ですが|ますが)$/.test(s)) return null;
       if ((s.match(/「/g) || []).length !== (s.match(/」/g) || []).length) return null;
-      pts -= Math.max(0, Math.abs(n - 17) - 5) * 1.5;                  // 12〜22字が理想
+      pts -= Math.max(0, Math.abs(n - 24) - 7) * 1.5;                  // 17〜31字が理想
       return { s, pts, cat };
     };
     const scored = Array.from(cands).map(score).filter((x) => x && x.pts > 0).sort((a, b) => b.pts - a.pts);
@@ -761,7 +764,7 @@ ${text}`;
         // AIがどうしても使えない（混雑・上限）場合は、本文から機械的に抜き出した案を出す
         const local = localTitleCandidates(text);
         if (!local.length) throw e;
-        renderTitles(local);
+        renderTitles(local, { ideal: 35, max: 35 });   // 機械抽出は15〜35字なので、字数の注意は出さない
         out.insertAdjacentHTML("afterbegin",
           `<div class="raw-error">AIが混み合っていて使えなかったため、本文から機械的に抜き出した案を表示しています（目安です。意味が通るか、自分で確認してください）。<br><small>${esc(String(e.message || e).split("\n")[0].slice(0, 120))}</small></div>`);
         setStatus(status, "AIが使えなかったため、機械抽出の案を表示しました");
