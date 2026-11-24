@@ -113,28 +113,22 @@ const CONFIG = {
 ・修正前と同じ内容（全角・半角、句読点の見た目だけの違い）の指摘は出さない
 ・短い語句の指摘に対して、長い文章を新しく書き足す案は出さない`;
 
-/** 文章の語尾（です・ます／だ・である）をシステムが数えた結果を、AIに伝える */
-function styleNote(text) {
-  const st = RuleEngine.docStyle(text);
-  const nm = (k) => (k === "desu" ? "です・ます" : "だ・である");
-  return `【語尾の集計（システムが数えた結果）】
+  /** 文章の語尾（です・ます／だ・である）をシステムが数えた結果を、AIに伝える */
+  function styleNote(text) {
+    const st = RuleEngine.docStyle(text);
+    const nm = (k) => (k === "desu" ? "です・ます" : "だ・である");
+    return `【語尾の集計（システムが数えた結果）】
 です・ます調 ${st.desu}文／だ・である調 ${st.da}文
 ${st.major ? `→ この文章は「${nm(st.major)}調」が多数派。語尾の指摘は、少数派の文だけにし、修正案は「${nm(st.major)}調」に合わせる。` : ""}
 全体がほぼ統一されている場合は、語尾の指摘をしない。「他の部分で混在している可能性」のような推測では指摘しない。`;
-}
+  }
 
-const AMBIGUOUS_NOTE =
+  const AMBIGUOUS_NOTE =
 `【文脈で判断するコンテンツ名（講座名として書かれているときだけ指摘する。一般的な意味で使われているだけなら指摘しない）】
 ${LITERAL_RULES.ambiguousContentNames.map(([w, c, n]) => `・「${w}」→「${c}」（${n}）`).join("\n")}`;
 
-  function buildSurveyPrompt(items) {
-    const list = items
-      .map((it) => `[${it.index}] 質問：${it.question}\n回答：${it.answer || "（空欄）"}`)
-      .join("\n\n");
-    return `あなたは、大学受験予備校の「合格体験記」の一次チェック担当です。
-下の「アンケート回答」を、ルールに沿って確認し、直すべき箇所だけを指摘してください。
-
-const DIFFICULTY_NOTE =
+  // ※ このブロックは、関数の外（ここ）に置く。buildSurveyPrompt の中に入れると文法エラーになる
+  const DIFFICULTY_NOTE =
 `【最優先のチェック：模試の難しさの書き方】
 「東進の模試は共通テスト本番より難しい（難度・難易度・レベルが高い）」という趣旨の文は、誤字（例：「何度が高い」→「難度が高い」）を直すだけで済ませない。
 ・この趣旨の文は、誤字の指摘より、この指摘を優先する（同じ箇所を2つ指摘しない）
@@ -145,6 +139,13 @@ const DIFFICULTY_NOTE =
 ・reason に、「東進の模試が本番より難しいと書くのは掲載しない決まりのため、削除か、本番と同レベルへの書き換えが必要」と書く
 ・迷う場合は（A）より（B）を優先する（文章の意味が残るため）
 ・actionOnPublish は、（A）のときだけ true`;
+
+  function buildSurveyPrompt(items) {
+    const list = items
+      .map((it) => `[${it.index}] 質問：${it.question}\n回答：${it.answer || "（空欄）"}`)
+      .join("\n\n");
+    return `あなたは、大学受験予備校の「合格体験記」の一次チェック担当です。
+下の「アンケート回答」を、ルールに沿って確認し、直すべき箇所だけを指摘してください。
 
 【削除対象（掲載前に削除を検討するもの）】
 ${bullets(RULES.deleteItems)}
@@ -183,6 +184,8 @@ ${bullets(RULES.styleRules)}
 ${COMMON_NOTE}
 
 ${AMBIGUOUS_NOTE}
+
+${DIFFICULTY_NOTE}
 
 ${styleNote(text)}
 
@@ -410,7 +413,7 @@ ${text}`;
     updateSurveyButtons();
     setStatus($("#surveyStatus"), surveyItems.length ? "" : "項目が見つかりませんでした。貼り付け内容を確認してください。");
   });
-  
+
   $("#surveyInput").addEventListener("input", () => { surveyItems = []; renderParsePreview(); updateSurveyButtons(); });
 
   function renderSurveyResults(ruleByIndex, aiByIndex, usedAi) {
@@ -502,12 +505,10 @@ ${text}`;
   $("#surveyRunBtn").addEventListener("click", runSurveyAI);
 
   async function trackError(action, e) {
-  const msg = String((e && e.message) || e).replace(/\s+/g, " ").slice(0, 150);
-  await UsageLogger.log("エラー：" + action, 1, msg);
+    const msg = String((e && e.message) || e).replace(/\s+/g, " ").slice(0, 150);
+    await UsageLogger.log("エラー：" + action, 1, msg);
   }
 
-
-  
   /* ============================================================
      ② 本文校正
      ============================================================ */
@@ -600,7 +601,6 @@ ${text}`;
   function updateTextButtons() {
     $("#runBtn").disabled = false;
   }
-  
 
   async function runProofAI() {
     const text = inputText.value;
@@ -709,7 +709,6 @@ ${text}`;
   }
   $("#titleRunBtn").addEventListener("click", runTitleAI);
 
-
   /* ============================================================
      利用の記録（名前・日時・機能・件数だけ。本文は送らない）
      ============================================================ */
@@ -794,7 +793,7 @@ ${text}`;
     $("#allRunBtn").disabled = !has;
   }
   $("#allInput").addEventListener("input", applyAllParts);
-  
+
   const countIssues = (sel) => $$(".issue", $(sel)).length;
 
   function renderAllSummary(usedAi) {
