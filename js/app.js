@@ -203,7 +203,7 @@ ${text}`;
 
   function buildTitlePrompt(text) {
     return `あなたは、大学受験予備校の「合格体験記」のタイトルを付ける担当です。
-下の「本文」から、タイトル案を5つ出してください。
+下の「本文」から、タイトル案を10個出してください。
 
 【優先順位（上ほど優先）】
 ${RULES.titleRules.priority.map((s, i) => `${i + 1}. ${s}`).join("\n")}
@@ -213,8 +213,7 @@ ${RULES.titleRules.format}
 
 【出力のきまり】
 ・JSONのみを返す。形式は {"titles":[{text, basis, priorityMatched}]}
-・text は、タイトル案そのもの。必ず20字以内にする（どうしても収まらない場合のみ最大30字）。出力する前に、自分で文字数を数えて確認すること
-・20字以内の案を、5案のうち4案以上にする。30字を超える案は、1つも出力しない
+・text は、本人の文章から抜き出した、短いタイトル案。目安は20字以内。長くなりすぎないようにする（文字数の確認は、システム側で行う）
 ・basis は、本文のどの部分から抜き出したか（本文の該当箇所を短く）
 ・priorityMatched は、上の優先順位のどれに当たるか
 ・同じ観点に偏らず、バランスよく選ぶ
@@ -677,6 +676,21 @@ ${text}`;
     });
   }
 
+  /** AIが使えないときの代わり：本文から、短い区切りを機械的に抜き出す（目安） */
+  const TITLE_KEYS = ["東進","模試","共通テスト","過去問","先取り","基礎","志望校","合格","部活","継続","習慣","担任助手","チーム","第一志望","逆転","苦手","克服","演習","勉強","成長","努力"];
+  function localTitleCandidates(text) {
+    const seen = new Set();
+    return String(text).replace(/\s+/g, "")
+      .split(/[。！？!?]/).flatMap((s) => s.split(/[、，,]/))
+      .map((s) => s.trim())
+      .filter((s) => s.length >= 8 && s.length <= CONFIG.TITLE_MAX)
+      .map((s) => ({ s, score: TITLE_KEYS.filter((k) => s.includes(k)).length * 10 - Math.abs(s.length - 16) }))
+      .sort((a, b) => b.score - a.score)
+      .filter((x) => (seen.has(x.s) ? false : (seen.add(x.s), true)))
+      .slice(0, 5)
+      .map((x) => ({ text: x.s, basis: x.s, priorityMatched: "本文からの機械的な抜き出し（AIなし・目安）" }));
+  }
+
   async function runTitleAI() {
     const text = titleInput.value;
     const status = $("#titleStatus"), out = $("#titleResults"), btn = $("#titleRunBtn");
@@ -688,27 +702,37 @@ ${text}`;
     try {
       const pick = (raw) => Array.isArray(raw && raw.titles) ? raw.titles.filter((t) => t && t.text) : [];
       const len = (t) => Array.from(RuleEngine.enforceOnText(t.text || "")).length;
+      // 長さの確認はシステム側で行う：上限（30字）以内の案だけを残し、短い順に最大5件
+      const finalize = (list) => list.filter((t) => len(t) <= CONFIG.TITLE_MAX).sort((a, b) => len(a) - len(b)).slice(0, 5);
+      const ask = (prompt) => GeminiClient.call(getApiKey(), getModel(), prompt, "titles", getFallbacks(), true);
 
-      let titles = pick(await GeminiClient.call(getApiKey(), getModel(), buildTitlePrompt(text), "titles", getFallbacks()));
-
-      // 30字を超える案が混ざっている、または20字以内の案が3つ未満なら、1回だけやり直す
-      if (titles.some((t) => len(t) > CONFIG.TITLE_MAX) ||
-          titles.filter((t) => len(t) <= CONFIG.TITLE_IDEAL).length < 3) {
-        const retryPrompt = buildTitlePrompt(text) +
-          `\n\n【やり直し】前回の案は長すぎました。次の案は使わず、すべて${CONFIG.TITLE_IDEAL}字以内（どうしても収まらない場合のみ最大${CONFIG.TITLE_MAX}字）で作り直してください。\n` +
-          titles.map((t) => `・${t.text}（${len(t)}字）`).join("\n");
-        const retry = pick(await GeminiClient.call(getApiKey(), getModel(), retryPrompt, "titles", getFallbacks()));
-        if (retry.length) titles = retry;
+      let titles = [];
+      try {
+        titles = finalize(pick(await ask(buildTitlePrompt(text))));
+        // 使える案が3つ未満のときだけ、1回やり直す
+        if (titles.length < 3) {
+          const retry = finalize(pick(await ask(buildTitlePrompt(text) +
+            `\n\n【やり直し】前回は長い案が多すぎました。すべて${CONFIG.TITLE_IDEAL}字以内で、10個出し直してください。`)));
+          if (retry.length > titles.length) titles = retry;
+        }
+      } catch (e) {
+        // AIがどうしても使えない（混雑・上限）場合は、本文から機械的に抜き出した案を出す
+        const local = localTitleCandidates(text);
+        if (!local.length) throw e;
+        renderTitles(local);
+        out.insertAdjacentHTML("afterbegin",
+          `<div class="raw-error">AIが混み合っていて使えなかったため、本文から機械的に抜き出した案を表示しています（目安です。意味が通るか、自分で確認してください）。<br><small>${esc(String(e.message || e).split("\n")[0].slice(0, 120))}</small></div>`);
+        setStatus(status, "AIが使えなかったため、機械抽出の案を表示しました");
+        trackError("タイトル案", e);
+        return false;
       }
-      // 最終的に、上限を超える案は表示しない。短い案を上に並べる
-      titles = titles.filter((t) => len(t) <= CONFIG.TITLE_MAX).sort((a, b) => len(a) - len(b));
       renderTitles(titles);
       setStatus(status, "完了しました");
       track("タイトル案");
     } catch (e) {
       renderError(out, e);
       setStatus(status, "エラーが発生しました");
-      trackError("タイトル案", e);   // 本文校正／タイトル案では、それぞれの名前に
+      trackError("タイトル案", e);
       return false;
     } finally {
       updateTitleButtons();
