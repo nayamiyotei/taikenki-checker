@@ -522,7 +522,7 @@ ${text}`;
 
     const preview = document.createElement("div");
     preview.innerHTML =
-      `<div class="preview-ttl">PREVIEW — 指摘箇所をハイライト</div>
+      `<div class="preview-ttl">プレビュー</div>
        <div class="preview-box">${renderHighlighted(text, issues)}</div>`;
     out.appendChild(preview);
 
