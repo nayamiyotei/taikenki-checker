@@ -29,7 +29,7 @@ export async function onRequest({ request, env, next }) {
       }
     } catch (e) {}
   }
-
+  
   return new Response("認証が必要です", {
     status: 401,
     headers: { "WWW-Authenticate": 'Basic realm="一次チェックツール", charset="UTF-8"' },
