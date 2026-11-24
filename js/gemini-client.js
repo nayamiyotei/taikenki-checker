@@ -104,7 +104,7 @@ const GeminiClient = (() => {
    * @param {string} prompt
    * @param {"issues"|"titles"} schemaKind - 期待する出力スキーマ
    */
-  async function callOnce(apiKey, model, prompt, schemaKind = "issues", signal) {
+  async function callOnce(apiKey, model, prompt, schemaKind = "issues", signal, fast = false) {
     const safeApiKey = toHeaderSafeAscii(apiKey, "APIキー");
     const safeModel = toHeaderSafeAscii(model, "モデル名");
     const schema = schemaKind === "titles" ? TITLES_SCHEMA : ISSUES_SCHEMA;
@@ -118,13 +118,18 @@ const GeminiClient = (() => {
           contents: [{ parts: [{ text: prompt }] }],
           generationConfig: {
             responseMimeType: "application/json",
-            responseSchema: schema
+            responseSchema: schema,
+            // fast: 「考える時間」を最小にして、速く返させる（対応していないモデルでは外してやり直す）
+            ...(fast ? { thinkingConfig: { thinkingBudget: 0 } } : {})
           }
         })
       }
     );
     if (!res.ok) {
       const errText = await res.text();
+      if (fast && res.status === 400 && /thinking/i.test(errText)) {
+        return callOnce(apiKey, model, prompt, schemaKind, signal, false);   // 非対応のモデル：通常設定でやり直す
+      }
       const q = res.status === 429 ? parseQuota(errText) : null;
       const hint = res.status === 429
         ? `\n\n※429は、Googleの無料枠の上限（回数・文字量）です。${q.daily ? "「1日の上限」に達している可能性があります。明日になるか、別のモデルに切り替えてください。" : "1分ほど待ってから、もう一度押してください。続く場合は「モデル」を別のものに切り替えてください。"}`
@@ -146,11 +151,11 @@ const GeminiClient = (() => {
   const BUSY_WAITS = [2000, 4000];   // 混雑時は、同じモデルで最大2回だけやり直す
 
   /** タイムアウト付きで1回呼ぶ。時間切れは 504 として扱う */
-  async function callWithTimeout(apiKey, model, prompt, kind) {
+  async function callWithTimeout(apiKey, model, prompt, kind, fast) {
     const ctl = new AbortController();
     const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
     try {
-      return await callOnce(apiKey, model, prompt, kind, ctl.signal);
+      return await callOnce(apiKey, model, prompt, kind, ctl.signal, fast);
     } catch (e) {
       if (e && e.name === "AbortError") {
         const err = new Error("APIエラー（504）: 応答に時間がかかりすぎたため中断しました（Google側が混み合っている可能性があります）");
@@ -165,7 +170,7 @@ const GeminiClient = (() => {
    * それでもだめ、または 429（無料枠の上限）なら、そのモデルは諦めて次のモデルへ進む。
    * @param {string[]} fallbacks 予備のモデル名（先頭から順に試す）
    */
-  async function call(apiKey, model, prompt, schemaKind = "issues", fallbacks = []) {
+  async function call(apiKey, model, prompt, schemaKind = "issues", fallbacks = [], fast = false) {
     const models = [model, ...fallbacks.filter((m) => m && m !== model)];
     let lastErr = null;
     for (let mi = 0; mi < models.length; mi++) {
@@ -173,7 +178,7 @@ const GeminiClient = (() => {
       for (let t = 0; ; t++) {
         try {
           if (mi > 0 && t === 0 && GeminiClient.onProgress) GeminiClient.onProgress(`混み合っているため、別のモデル（${m}）で試しています`);
-          return await callWithTimeout(apiKey, m, prompt, schemaKind);
+          return await callWithTimeout(apiKey, m, prompt, schemaKind, fast);
         } catch (e) {
           lastErr = e;
           const st = e && e.status;
