@@ -127,14 +127,16 @@ const GeminiClient = (() => {
     );
     if (!res.ok) {
       const errText = await res.text();
-      if (fast && res.status === 400 && /thinking/i.test(errText)) {
+      if (fast && res.status === 400) {      // 「考える時間を減らす」設定が合わないモデル：その設定を外してやり直す
         return callOnce(apiKey, model, prompt, schemaKind, signal, false);   // 非対応のモデル：通常設定でやり直す
       }
       const q = res.status === 429 ? parseQuota(errText) : null;
       const hint = res.status === 429
         ? `\n\n※429は、Googleの無料枠の上限（回数・文字量）です。${q.daily ? "「1日の上限」に達している可能性があります。明日になるか、別のモデルに切り替えてください。" : "1分ほど待ってから、もう一度押してください。続く場合は「モデル」を別のものに切り替えてください。"}`
         : `\n\n※404の場合はモデル名が廃止されている可能性があります。エラー本文中の推奨モデル名に「モデル」欄のvalue値を書き換えてください。`;
-      const err = new Error(`APIエラー（${res.status}）: ${errText.slice(0, 400)}${hint}`);
+      let apiMsg = "";
+      try { apiMsg = (JSON.parse(errText).error || {}).message || ""; } catch (_) {}
+      const err = new Error(`APIエラー（${res.status}）: ${(apiMsg || errText).replace(/\s+/g, " ").slice(0, 400)}${hint}`);
       err.status = res.status;
       if (q) { err.retrySec = q.sec; err.daily = q.daily; }
       throw err;
