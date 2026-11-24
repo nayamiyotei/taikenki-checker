@@ -766,7 +766,7 @@ ${text}`;
         if (!local.length) throw e;
         renderTitles(local, { ideal: 35, max: 35 });   // 機械抽出は15〜35字なので、字数の注意は出さない
         out.insertAdjacentHTML("afterbegin",
-          `<div class="raw-error">AIが混み合っていて使えなかったため、本文から機械的に抜き出した案を表示しています（目安です。意味が通るか、自分で確認してください）。<br><small>${esc(String(e.message || e).split("\n")[0].slice(0, 120))}</small></div>`);
+          `<div class="raw-error">AIが混み合っていて使えなかったため、本文から機械的に抜き出した案を表示しています（目安です。意味が通るか、自分で確認してください）。<br><small>${esc(String(e.message || e).split("\n")[0].slice(0, 220))}</small></div>`);
         setStatus(status, "AIが使えなかったため、機械抽出の案を表示しました");
         trackError("タイトル案", e);
         return false;
