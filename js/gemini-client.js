@@ -104,7 +104,7 @@ const GeminiClient = (() => {
    * @param {string} prompt
    * @param {"issues"|"titles"} schemaKind - 期待する出力スキーマ
    */
-  async function callOnce(apiKey, model, prompt, schemaKind = "issues") {
+  async function callOnce(apiKey, model, prompt, schemaKind = "issues", signal) {
     const safeApiKey = toHeaderSafeAscii(apiKey, "APIキー");
     const safeModel = toHeaderSafeAscii(model, "モデル名");
     const schema = schemaKind === "titles" ? TITLES_SCHEMA : ISSUES_SCHEMA;
@@ -112,6 +112,7 @@ const GeminiClient = (() => {
       `https://generativelanguage.googleapis.com/v1beta/models/${safeModel}:generateContent`,
       {
         method: "POST",
+        signal,
         headers: { "Content-Type": "application/json", "x-goog-api-key": safeApiKey },
         body: JSON.stringify({
           contents: [{ parts: [{ text: prompt }] }],
@@ -140,37 +141,55 @@ const GeminiClient = (() => {
   }
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-  /**
-   * 一時的な混雑（500/502/503/504）は、2秒・5秒・10秒待って最大3回やり直す。
-   * 429（無料枠の上限）は、1日の上限ならすぐ諦め、1分あたりの上限なら、
-   * Googleが指定した秒数（最大65秒）だけ待って、1回だけやり直す。
-   */
+  const TIMEOUT_MS = 40000;          // 1回の通信は40秒で打ち切る（固まって待ち続けない）
   const BUSY_STATUS = [500, 502, 503, 504];
-  const BUSY_WAITS = [2000, 5000, 10000];
+  const BUSY_WAITS = [2000, 4000];   // 混雑時は、同じモデルで最大2回だけやり直す
 
-  async function call(apiKey, model, prompt, schemaKind = "issues") {
-    let busyTry = 0, quotaTry = 0;
-    for (;;) {
-      try {
-        return await callOnce(apiKey, model, prompt, schemaKind);
-      } catch (e) {
-        const st = e && e.status;
-        if (BUSY_STATUS.includes(st) && busyTry < BUSY_WAITS.length) {
-          await sleep(BUSY_WAITS[busyTry++]);
-          continue;
-        }
-        if (st === 429 && !e.daily && quotaTry < 1) {
-          quotaTry++;
-          const sec = Math.min(Math.max((e.retrySec || 30) + 2, 5), 65);
-          if (typeof GeminiClient !== "undefined" && GeminiClient.onWait) GeminiClient.onWait(sec);
-          await sleep(sec * 1000);
-          continue;
-        }
-        throw e;
+  /** タイムアウト付きで1回呼ぶ。時間切れは 504 として扱う */
+  async function callWithTimeout(apiKey, model, prompt, kind) {
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+    try {
+      return await callOnce(apiKey, model, prompt, kind, ctl.signal);
+    } catch (e) {
+      if (e && e.name === "AbortError") {
+        const err = new Error("APIエラー（504）: 応答に時間がかかりすぎたため中断しました（Google側が混み合っている可能性があります）");
+        err.status = 504; throw err;
       }
-    }
+      throw e;
+    } finally { clearTimeout(timer); }
   }
 
-  return { call, onWait: null };
+  /**
+   * 1つのモデルで、混雑（500/502/503/504）なら短く2回だけやり直す。
+   * それでもだめ、または 429（無料枠の上限）なら、そのモデルは諦めて次のモデルへ進む。
+   * @param {string[]} fallbacks 予備のモデル名（先頭から順に試す）
+   */
+  async function call(apiKey, model, prompt, schemaKind = "issues", fallbacks = []) {
+    const models = [model, ...fallbacks.filter((m) => m && m !== model)];
+    let lastErr = null;
+    for (let mi = 0; mi < models.length; mi++) {
+      const m = models[mi];
+      for (let t = 0; ; t++) {
+        try {
+          if (mi > 0 && t === 0 && GeminiClient.onProgress) GeminiClient.onProgress(`混み合っているため、別のモデル（${m}）で試しています`);
+          return await callWithTimeout(apiKey, m, prompt, schemaKind);
+        } catch (e) {
+          lastErr = e;
+          const st = e && e.status;
+          if (BUSY_STATUS.includes(st) && t < BUSY_WAITS.length) {
+            if (GeminiClient.onProgress) GeminiClient.onProgress(`混み合っています。再試行しています（${t + 1}/${BUSY_WAITS.length}）`);
+            await sleep(BUSY_WAITS[t]);
+            continue;
+          }
+          if (st === 429 || BUSY_STATUS.includes(st)) break;   // 次のモデルへ
+          throw e;                                              // 404・キー不正など：すぐ表示
+        }
+      }
+    }
+    if (lastErr && models.length > 1) lastErr.message += `\n\n※試したモデル：${models.join("、")}。どれも混み合っているか、無料枠の上限です。1〜2分あけて、もう一度お試しください。`;
+    throw lastErr;
+  }
+
+  return { call, onProgress: null };
 })();
