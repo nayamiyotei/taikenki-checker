@@ -150,6 +150,33 @@ const RuleEngine = (() => {
     return out;
   }
 
+  /**
+   * 「東進の模試は共通テスト本番より難しい」という趣旨の表現を検出する（掲載しない決まり）。
+   * 「何度が高い」のような誤字でも拾う。修正案は「本番と同じレベル」への書き換え。
+   */
+  function findDifficultyClaims(text) {
+    if (!text) return [];
+    const re = /本番(?:よりも|より)(?:少し|やや|かなり|ずっと)?(?:(?:難度|難易度|何度|レベル)(?:が|の)高(?:い|く)|(?:難度|難易度)の高い|難しい|ハイレベル(?:な|で)?)/g;
+    const out = [], seen = new Set();
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (seen.has(m[0])) continue;
+      seen.add(m[0]);
+      const rest = text.slice(m.index + m[0].length);
+      let tail = "";                                              // 直後の言葉に合わせて、つなぎを足す
+      if (/^(?:東進|模試|試験|問題|過去問|演習|テスト|講座)/.test(rest)) tail = "の";
+      else if (/^(?:ので|のに)/.test(rest)) tail = "な";
+      out.push({
+        category: "模試の難しさ",
+        original: m[0],
+        suggested: "本番と同じレベル" + tail,
+        reason: "「東進の模試が共通テスト本番より難しい」という書き方は掲載しない決まりです。この部分を削除するか、「本番と同じレベル」の表現に直してください（元の文の他の内容は変えないでください）",
+        source: "rule-engine"
+      });
+    }
+    return out;
+  }
+
   /** 長い指摘の範囲に完全に含まれる短い指摘を除く（例：「高速マスター基礎力養成講座」と「高速マスター」） */
   function dropContainedIssues(issues, text) {
     const spans = (s) => { const r = []; let i = -1; while ((i = text.indexOf(s, i + 1)) !== -1) r.push([i, i + s.length]); return r; };
@@ -168,6 +195,7 @@ const RuleEngine = (() => {
     if (!text) return [];
     return dropContainedIssues([
       ...findNgTeacherViolations(text),
+      ...findDifficultyClaims(text),
       ...findLiteralPairViolations(text, LITERAL_RULES.contentNamePairs, "コンテンツ名"),
       ...findLiteralPairViolations(text, LITERAL_RULES.wordPairs, "用語"),
       ...findPunctuationViolations(text),
@@ -370,7 +398,10 @@ const RuleEngine = (() => {
           dropWrongContextIssues([{ original: "過去問演習講座", suggested: "過去問演習講座大学入学共通テスト対策" }],
             "共通テストと２次試験の過去問演習講座の結果をもとに").length ? "残っている" : "捨てる" },
       { input: "本文に無い original（全角に直して写された「６０」）", expected: "捨てる", run: () =>
-          cleanAiIssues([{ original: "６０", suggested: "60" }], () => "点数は60点").length ? "残っている" : "捨てる" }
+          cleanAiIssues([{ original: "６０", suggested: "60" }], () => "点数は60点").length ? "残っている" : "捨てる" },
+      { input: "本番よりも何度が高い東進の模試を受ける", expected: "本番と同じレベルの", run: (t) => (findDifficultyClaims(t)[0] || {}).suggested || "検出なし" },
+      { input: "本番と同じレベルの模試を受ける", expected: "検出なし", run: (t) => findDifficultyClaims(t).length ? "誤検出" : "検出なし" }
+
     ];
     return cases.map((c) => {
       const actual = c.run(c.input);
@@ -382,6 +413,7 @@ const RuleEngine = (() => {
     normalizeNumberWidth,
     findNumberWidthViolations,
     findNgTeacherViolations,
+    findDifficultyClaims,
     findLiteralPairViolations,
     findPunctuationViolations,
     dropContainedIssues,
