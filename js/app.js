@@ -676,19 +676,61 @@ ${text}`;
     });
   }
 
-  /** AIが使えないときの代わり：本文から、短い区切りを機械的に抜き出す（目安） */
-  const TITLE_KEYS = ["東進","模試","共通テスト","過去問","先取り","基礎","志望校","合格","部活","継続","習慣","担任助手","チーム","第一志望","逆転","苦手","克服","演習","勉強","成長","努力"];
+  /** AIが使えないときの代わり：本文から「タイトルらしい」部分を点数づけして抜き出す（目安） */
+  const TITLE_CATS = [
+    { name: "1・2年生の頃に有効なこと", pt: 30, re: /高[1-2１２]|高校[1-2１２]年|[1-2１２]年生|先取り|早くから|入学前/ },
+    { name: "ビフォーアフター", pt: 28, re: /[0-9０-９]+(?:点|位|割|倍|時間)|偏差値|判定|伸び|上が|アップ|から.{0,12}へ|合格最低/ },
+    { name: "人間的な成長", pt: 22, re: /成長|乗り越え|克服|変わ|気づ|学べ|学んだ|受験を通して|自信|前向き|諦め/ },
+    { name: "東進のコンテンツ", pt: 16, re: /東進|講座|模試|担任助手|チーム|ミーティング|過去問演習/ },
+    { name: "高校生のためになる情報", pt: 14, re: /おすすめ|大切|大事|重要|ルーティーン|やっておい|習慣|べき|ほうが|コツ|ポイント/ },
+    { name: "言葉・目標", pt: 10, re: /目指|将来|夢|志|目標|という言葉|モットー/ }
+  ];
   function localTitleCandidates(text) {
-    const seen = new Set();
-    return String(text).replace(/\s+/g, "")
-      .split(/[。！？!?]/).flatMap((s) => s.split(/[、，,]/))
-      .map((s) => s.trim())
-      .filter((s) => s.length >= 8 && s.length <= CONFIG.TITLE_MAX)
-      .map((s) => ({ s, score: TITLE_KEYS.filter((k) => s.includes(k)).length * 10 - Math.abs(s.length - 16) }))
-      .sort((a, b) => b.score - a.score)
-      .filter((x) => (seen.has(x.s) ? false : (seen.add(x.s), true)))
-      .slice(0, 5)
-      .map((x) => ({ text: x.s, basis: x.s, priorityMatched: "本文からの機械的な抜き出し（AIなし・目安）" }));
+    const body = String(text).replace(/\s+/g, "");
+    const max = CONFIG.TITLE_MAX;
+    const cands = new Set();
+    const add = (s) => {
+      s = String(s || "").replace(/^[、，,「『（(]+|[。！？!?、，,」』）)]+$/g, "").trim();
+      const n = Array.from(s).length;
+      if (n >= 10 && n <= max) cands.add(s);
+    };
+    // ①「…」で囲まれた言葉（名言・キーワード）
+    (body.match(/「([^「」]{6,30})」/g) || []).forEach((q) => add(q.slice(1, -1)));
+    // ②文、③読点で区切った部分、④隣り合う2つの部分
+    body.split(/[。！？!?]/).forEach((sent) => {
+      add(sent);
+      const cl = sent.split(/[、，,]/).filter(Boolean);
+      cl.forEach((c, i) => { add(c); if (i + 1 < cl.length) add(c + "、" + cl[i + 1]); });
+    });
+    const score = (s) => {
+      const n = Array.from(s).length;
+      let pts = 0, cat = null;
+      TITLE_CATS.forEach((c) => { if (c.re.test(s)) { if (!cat) cat = c.name; pts += c.pt; } });
+      if (!cat) return null;                                          // どの優先順位にも当たらないものは出さない
+      if (/^(私|僕|ぼく|わたし)(は|が|の)/.test(s)) pts -= 25;          // 自己紹介の書き出し
+      if (/入学し|通うことにし|きっかけ|始めました$/.test(s)) pts -= 20;
+      if (/^(そして|また|しかし|ですが|だから|そのため|その|これ|それ|あの|この)/.test(s)) pts -= 30;
+      if (/(これ|それ|あれ|この|その)/.test(s)) pts -= 10;
+      // 文が途中で切れている（助詞・連用形で終わる）、かぎ括弧の対応がずれているものは出さない
+      const finite = /(ました|ます|です|でした|ません|ない|った|した|れた|いた|えた|ある|いる|れる|する|なる|思う|たい|べき|こと|もの|だ|う)$/.test(s);
+      const noun = /[\u4e00-\u9fff\u30a0-\u30ffA-Za-z0-9０-９]$/.test(s);
+      if (!finite && !noun) return null;
+      if (/(ので|けど|ながら|たり|ですが|ますが)$/.test(s)) return null;
+      if ((s.match(/「/g) || []).length !== (s.match(/」/g) || []).length) return null;
+      pts -= Math.max(0, Math.abs(n - 17) - 5) * 1.5;                  // 12〜22字が理想
+      return { s, pts, cat };
+    };
+    const scored = Array.from(cands).map(score).filter((x) => x && x.pts > 0).sort((a, b) => b.pts - a.pts);
+    // 他の案を含む／含まれる案は、点数の高い方だけ残す。同じ観点は2件まで
+    const out = [], perCat = {};
+    scored.forEach((x) => {
+      if (out.length >= 5) return;
+      if (out.some((o) => o.s.includes(x.s) || x.s.includes(o.s))) return;
+      if ((perCat[x.cat] || 0) >= 2) return;
+      perCat[x.cat] = (perCat[x.cat] || 0) + 1;
+      out.push(x);
+    });
+    return out.map((x) => ({ text: x.s, basis: x.s, priorityMatched: x.cat + "（機械的な抜き出し・目安）" }));
   }
 
   async function runTitleAI() {
