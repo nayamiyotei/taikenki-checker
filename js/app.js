@@ -83,6 +83,11 @@ const CONFIG = {
 
   const getApiKey = () => $("#apiKey").value;
   const getModel  = () => $("#model").value;
+  // 混み合っているとき、順に試す予備のモデル（選択肢のうち、選んでいないもの。proは除く）
+  const getFallbacks = () => $$("#model option").map((o) => o.value).filter((v) => v && v !== getModel() && !/pro/i.test(v));
+  // 再試行・モデル切り替え中の様子を、いま動いている処理の表示欄に出す
+  let activeStatus = null;
+  GeminiClient.onProgress = (msg) => { if (activeStatus) setStatus(activeStatus, msg, true); };
 
   /* ============================================================
      プロンプト
@@ -475,10 +480,11 @@ ${text}`;
   async function runSurveyAI() {
     const btn = $("#surveyRunBtn"), status = $("#surveyStatus"), out = $("#surveyResults");
     btn.disabled = true;
+    activeStatus = status;
     setStatus(status, "AIが読んでいます", true);
     renderLoading(out);
     try {
-      const raw = await GeminiClient.call(getApiKey(), getModel(), buildSurveyPrompt(surveyItems), "issues");
+      const raw = await GeminiClient.call(getApiKey(), getModel(), buildSurveyPrompt(surveyItems), "issues", getFallbacks());
       const allAnswers = surveyItems.map((i) => i.answer).join("\n");
       const aiIssues = RuleEngine.dropWrongContextIssues(RuleEngine.dropWrongStyleIssues(RuleEngine.cleanAiIssues(
         RuleEngine.enforceOnAiIssues(RuleEngine.validateIssuesShape(raw)),
@@ -607,10 +613,11 @@ ${text}`;
     const status = $("#statusText"), out = $("#results"), btn = $("#runBtn");
     if (!text.trim()) { setStatus(status, "本文を貼り付けてください"); return; }
     btn.disabled = true;
+    activeStatus = status;
     setStatus(status, "AIが読んでいます", true);
     renderLoading(out);
     try {
-      const raw = await GeminiClient.call(getApiKey(), getModel(), buildProofPrompt(text), "issues");
+      const raw = await GeminiClient.call(getApiKey(), getModel(), buildProofPrompt(text), "issues", getFallbacks());
       const ai = RuleEngine.dropWrongContextIssues(RuleEngine.dropWrongStyleIssues(RuleEngine.cleanAiIssues(
         RuleEngine.enforceOnAiIssues(RuleEngine.validateIssuesShape(raw)), () => text), text), text);
       const merged = RuleEngine.mergeIssues(RuleEngine.runDeterministicChecks(text), ai);
@@ -675,13 +682,14 @@ ${text}`;
     const status = $("#titleStatus"), out = $("#titleResults"), btn = $("#titleRunBtn");
     if (!text.trim()) { setStatus(status, "本文を貼り付けてください"); return; }
     btn.disabled = true;
+    activeStatus = status;
     setStatus(status, "AIが読んでいます", true);
     renderLoading(out);
     try {
       const pick = (raw) => Array.isArray(raw && raw.titles) ? raw.titles.filter((t) => t && t.text) : [];
       const len = (t) => Array.from(RuleEngine.enforceOnText(t.text || "")).length;
 
-      let titles = pick(await GeminiClient.call(getApiKey(), getModel(), buildTitlePrompt(text), "titles"));
+      let titles = pick(await GeminiClient.call(getApiKey(), getModel(), buildTitlePrompt(text), "titles", getFallbacks()));
 
       // 30字を超える案が混ざっている、または20字以内の案が3つ未満なら、1回だけやり直す
       if (titles.some((t) => len(t) > CONFIG.TITLE_MAX) ||
@@ -689,7 +697,7 @@ ${text}`;
         const retryPrompt = buildTitlePrompt(text) +
           `\n\n【やり直し】前回の案は長すぎました。次の案は使わず、すべて${CONFIG.TITLE_IDEAL}字以内（どうしても収まらない場合のみ最大${CONFIG.TITLE_MAX}字）で作り直してください。\n` +
           titles.map((t) => `・${t.text}（${len(t)}字）`).join("\n");
-        const retry = pick(await GeminiClient.call(getApiKey(), getModel(), retryPrompt, "titles"));
+        const retry = pick(await GeminiClient.call(getApiKey(), getModel(), retryPrompt, "titles", getFallbacks()));
         if (retry.length) titles = retry;
       }
       // 最終的に、上限を超える案は表示しない。短い案を上に並べる
